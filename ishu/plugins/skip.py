@@ -13,13 +13,6 @@ from ishu.helpers import admin_check, can_skip
 @app.on_message(filters.command(["skip", "next"]) & filters.group & ~app.bl_users)
 @lang.language()
 async def _skip(_, m: types.Message):
-    if not await can_skip(m.chat.id, m.from_user.id):
-        return await m.reply_text(
-            "<b><emoji id=5424857974784925603>⚠️</emoji> Only admins can skip songs in this chat.</b>\n"
-            "<i>An admin can change this setting using <code>/skipmode everyone</code>.</i>",
-            parse_mode=enums.ParseMode.HTML,
-        )
-
     if not await db.get_call(m.chat.id):
         return await m.reply_text(m.lang["not_playing"])
 

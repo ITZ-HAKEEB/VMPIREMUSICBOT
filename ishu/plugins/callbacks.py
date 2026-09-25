@@ -1,3 +1,4 @@
+import os
 # Copyright (c) 2025 AnonymousX1025
 # Licensed under the MIT License.
 # This file is part of AnonXMusic
@@ -85,9 +86,11 @@ async def _controls(_, query: types.CallbackQuery):
             pass
 
         msg = await app.send_message(chat_id=chat_id, text=query.lang["play_next"])
-        # Download the file if not already cached locally
+        # Use disk cache if present, else stream live via API
         if not media.file_path:
-            media.file_path = await yt.download(media.id, video=media.video)
+            _cf = f"downloads/{media.id}.{'mp4' if media.video else 'mp3'}"
+            if os.path.exists(_cf) and os.path.getsize(_cf) > 256 * 1024:
+                media.file_path = _cf
         media.message_id = msg.id
         return await anon.play_media(chat_id, msg, media)
 

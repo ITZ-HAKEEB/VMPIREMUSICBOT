@@ -168,13 +168,11 @@ async def play_hndlr(
 
             return
 
-    # ── Immediate play: prefer a cached file, else download fresh ───────────
+    # ── Immediate play: prefer a cached file, else stream live via API ─────
     if not file.file_path:
         fname = f"downloads/{file.id}.{'mp4' if video else 'mp3'}"
-        if Path(fname).exists():
+        if Path(fname).exists() and Path(fname).stat().st_size > 256 * 1024:
             file.file_path = fname
-        else:
-            file.file_path = await yt.download(file.id, video=video)
 
     # Start playback (background download is triggered inside play_media)
     await anon.play_media(chat_id=m.chat.id, message=sent, media=file)

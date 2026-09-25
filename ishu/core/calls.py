@@ -284,7 +284,7 @@ class TgCall(PyTgCalls):
                         else types.MediaStream.Flags.IGNORE
                     ),
                     ffmpeg_parameters=(
-                        f"-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -http_persistent 0 -probesize 5M -analyzeduration 5000000"
+                        f"-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -http_persistent 0 -probesize 128k -analyzeduration 1000000"
                         + (f" -ss {seek_time}" if seek_time > 1 else "")
                     ) if real_media_path.startswith("http") else (
                         f"-ss {seek_time}" if seek_time > 1 else None
@@ -356,7 +356,7 @@ class TgCall(PyTgCalls):
                         else types.MediaStream.Flags.IGNORE
                     ),
                     ffmpeg_parameters=(
-                        f"-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -http_persistent 0 -probesize 5M -analyzeduration 5000000"
+                        f"-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -http_persistent 0 -probesize 128k -analyzeduration 1000000"
                         + (f" -ss {seek_time}" if seek_time > 1 else "")
                     ) if real_media_path.startswith("http") else (
                         f"-ss {seek_time}" if seek_time > 1 else None
@@ -717,17 +717,11 @@ class TgCall(PyTgCalls):
         msg = await app.send_message(chat_id=chat_id, text=_lang["play_next"])
 
         # ── Resolve playback source for the next track ────────────────────────
-        # Priority: existing file_path → cached local file → fresh download.
+        # Priority: existing file_path → cached local file → stream live via API.
         if not media.file_path:
             fname = f"downloads/{media.id}.{'mp4' if media.video else 'mp3'}"
-            if Path(fname).exists():
+            if Path(fname).exists() and Path(fname).stat().st_size > 256 * 1024:
                 media.file_path = fname
-            else:
-                media.file_path = await yt.download(media.id, video=media.video)
-
-        if not media.file_path:
-            await msg.edit_text(_lang["error_no_file"].format(config.SUPPORT_CHAT))
-            return await self.play_next(chat_id)
 
         # ── Pre-download the track AFTER this one (look-ahead) ───────────────
         next_media = queue.get_next(chat_id, check=True)
