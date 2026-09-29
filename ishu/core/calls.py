@@ -1,3 +1,4 @@
+import os
 from html import escape
 import time
 from ishu.helpers._play import is_vc_active
@@ -7,7 +8,6 @@ from ishu.helpers._play import is_vc_active
 
 
 import asyncio
-import os
 import re
 from pathlib import Path
 
@@ -62,6 +62,21 @@ def _bg_download(media) -> None:
 # songs or re-uploads.
 _recent_ids: "dict[int, list[str]]" = {}
 _recent_titles: "dict[int, list[str]]" = {}
+
+
+def get_pyro_client(call_client):
+    """Safely extract Pyrogram Client from PyTgCalls or Client object."""
+    if not call_client:
+        return app
+    if hasattr(call_client, "_app"):
+        app_obj = call_client._app
+        if hasattr(app_obj, "_bind_client"):
+            bind_obj = app_obj._bind_client
+            if hasattr(bind_obj, "_app"):
+                return bind_obj._app
+            return bind_obj
+        return app_obj
+    return call_client
 
 def _normalize_title(title: str | None) -> str:
     if not title:
@@ -153,6 +168,7 @@ class TgCall(PyTgCalls):
         self.clients = []
         self._recent_joins: dict[tuple[int, int], float] = {}
         self._chat_links: dict[int, str] = {}
+        self._stream_start_time: dict[int, float] = {}
 
     async def pause(self, chat_id: int) -> bool:
         client = await db.get_assistant(chat_id)
@@ -166,6 +182,12 @@ class TgCall(PyTgCalls):
 
     async def stop(self, chat_id: int) -> None:
         client = await db.get_assistant(chat_id)
+        prev_msg_id = _playing_messages.pop(chat_id, None)
+        if prev_msg_id:
+            try:
+                await app.delete_messages(chat_id=chat_id, message_ids=prev_msg_id, revoke=True)
+            except Exception:
+                pass
 
         # Clean up files for all media items in queue
         q_items = queue.get_queue(chat_id)
@@ -180,6 +202,10 @@ class TgCall(PyTgCalls):
             await client.leave_call(chat_id, close=False)
         except Exception:
             pass
+
+    async def stop_stream(self, chat_id: int) -> None:
+        """Alias for stop to prevent AttributeError."""
+        await self.stop(chat_id)
 
 
     async def play_media(
@@ -267,14 +293,23 @@ class TgCall(PyTgCalls):
                 # Background task caches the file for next play
                 asyncio.create_task(_bg_cache_dl())
                 media_path = stream_url
-                logger.info("🚀 [INSTANT STREAM] Playing via HTTP immediately: %s", media.id)
-        # ── Step 2: Attempt playback ──────────────────────────────────────────
+                    # ── Step 2: Attempt playback ──────────────────────────────────────────
         stream_success = False
         if media_path:
             try:
-                real_media_path = os.path.abspath(media_path) if not media_path.startswith("http") else media_path
+                pyro_client = get_pyro_client(client)
+                try:
+                    await pyro_client.get_chat(chat_id)
+                except Exception as peer_err:
+                    logger.warning(f"Assistant client peer missing for chat {chat_id}: {peer_err}")
+                    try:
+                        invitelink = await app.export_chat_invite_link(chat_id)
+                        await pyro_client.join_chat(invitelink)
+                    except Exception as join_err:
+                        logger.warning(f"Assistant auto-join failed for {chat_id}: {join_err}")
+
                 stream = types.MediaStream(
-                    media_path=real_media_path,
+                    media_path=media_path,
                     audio_parameters=types.AudioQuality.HIGH,
                     video_parameters=types.VideoQuality.HD_720p,
                     audio_flags=types.MediaStream.Flags.REQUIRED,
@@ -283,32 +318,18 @@ class TgCall(PyTgCalls):
                         if media.video
                         else types.MediaStream.Flags.IGNORE
                     ),
-                    ffmpeg_parameters=(
-                        f"-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -http_persistent 0 -probesize 128k -analyzeduration 1000000"
-                        + (f" -ss {seek_time}" if seek_time > 1 else "")
-                    ) if real_media_path.startswith("http") else (
-                        f"-ss {seek_time}" if seek_time > 1 else None
-                    ),
+                    ffmpeg_parameters=(f"-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -probesize 128k -analyzeduration 1000000" + (f" -ss {seek_time}" if seek_time > 1 else "")) if str(media_path).startswith("http") else (f"-ss {seek_time}" if seek_time > 1 else None),
                 )
                 await client.play(
                     chat_id=chat_id,
                     stream=stream,
                     config=types.GroupCallConfig(auto_start=True),
                 )
+                self._stream_start_time[chat_id] = time.time()
                 stream_success = True
 
             except Exception as e:
-                err_str = str(e)
-                if any(err in err_str for err in ["GROUPCALL_INVALID", "GroupCallNotFound", "CHANNEL_INVALID", "ChannelInvalid", "NoActiveGroupCall"]):
-                    logger.info("Voice chat closed/invalid/assistant not in chat %s for %s", chat_id, getattr(media, "id", "?"))
-                    await message.edit_text("ʙᴀʙᴜ ᴛᴀɴɪ ᴠᴏɪᴄᴇ ᴄʜᴀᴛ ᴄʜᴀʟᴜ ᴋᴀʀ")
-                    if hasattr(self, "stop_stream"):
-                        await self.stop_stream(chat_id)
-                    elif hasattr(self, "stop"):
-                        await self.stop(chat_id)
-                    return
-                err_detail = err_str.strip() or "PyTgCalls HTTP probe timeout"
-                logger.info("Direct HTTP stream probe skipped for %s (%s) → Downloading file for smooth playback...", getattr(media, "id", "?"), err_detail)
+                logger.warning("Playback failed for %s: %s. Falling back to download.", getattr(media, "id", "?"), e)
                 stream_success = False
 
         # ── Step 3: Fallback — download then play ─────────────────────────────
@@ -319,12 +340,12 @@ class TgCall(PyTgCalls):
                 title=media.title,
                 video=media.video,
             )
-            media.file_path = await yt.download(media.id, video=media.video, force_cold_file=True)
+            media.file_path = await yt.download(media.id, video=media.video)
             media_path = media.file_path
 
         if not media_path:
             if not await is_vc_active(chat_id):
-                await message.edit_text("ʙᴀʙᴜ ᴛᴀɴɪ ᴠᴏɪᴄᴇ ᴄʜᴀᴛ ᴄʜᴀʟᴜ ᴋᴀʀ")
+                await message.edit_text("ʙᴀʙᴜ ᴛᴀɴɪ ᴠᴏɪᴄᴇ ᴄʜᴀʟᴜ ᴋᴀʀ")
                 if hasattr(self, "stop_stream"):
                     await self.stop_stream(chat_id)
                 elif hasattr(self, "stop"):
@@ -344,9 +365,8 @@ class TgCall(PyTgCalls):
 
         try:
             if not stream_success:
-                real_media_path = os.path.abspath(media_path) if not media_path.startswith("http") else media_path
                 stream = types.MediaStream(
-                    media_path=real_media_path,
+                    media_path=media_path,
                     audio_parameters=types.AudioQuality.HIGH,
                     video_parameters=types.VideoQuality.HD_720p,
                     audio_flags=types.MediaStream.Flags.REQUIRED,
@@ -355,87 +375,132 @@ class TgCall(PyTgCalls):
                         if media.video
                         else types.MediaStream.Flags.IGNORE
                     ),
-                    ffmpeg_parameters=(
-                        f"-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -http_persistent 0 -probesize 128k -analyzeduration 1000000"
-                        + (f" -ss {seek_time}" if seek_time > 1 else "")
-                    ) if real_media_path.startswith("http") else (
-                        f"-ss {seek_time}" if seek_time > 1 else None
-                    ),
+                    ffmpeg_parameters=(f"-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -probesize 128k -analyzeduration 1000000" + (f" -ss {seek_time}" if seek_time > 1 else "")) if str(media_path).startswith("http") else (f"-ss {seek_time}" if seek_time > 1 else None),
                 )
-                await client.play(
-                    chat_id=chat_id,
-                    stream=stream,
-                    config=types.GroupCallConfig(auto_start=True),
-                )
-        except Exception as e:
-            err_str = str(e)
-            if any(err in err_str for err in ["GROUPCALL_INVALID", "GroupCallNotFound", "CHANNEL_INVALID", "ChannelInvalid", "NoActiveGroupCall"]):
-                logger.info("Voice chat closed/invalid/assistant not in chat %s for %s", chat_id, getattr(media, "id", "?"))
-                await message.edit_text("ʙᴀʙᴜ ᴛᴀɴɪ ᴠᴏɪᴄᴇ ᴄʜᴀᴛ ᴄʜᴀʟᴜ ᴋᴀʀ")
-                await self.stop_stream(chat_id)
-                return
-            logger.error("Final playback failed for %s: %s", getattr(media, "id", "?"), e)
-            await message.edit_text(_lang["error_no_file"].format(config.SUPPORT_CHAT))
-            return await self.play_next(chat_id)
-
-        if not seek_time:
-            # ── Auto-delete previous playing message in this chat ──
-            prev_msg_id = _playing_messages.pop(chat_id, None)
-            if prev_msg_id and getattr(message, "id", None) and prev_msg_id != message.id:
+                pyro_client = get_pyro_client(client)
                 try:
-                    await app.delete_messages(chat_id=chat_id, message_ids=prev_msg_id, revoke=True)
-                    logger.info("Auto-deleted previous playing message %s in chat %s", prev_msg_id, chat_id)
-                except Exception:
-                    pass
+                    await pyro_client.get_chat(chat_id)
+                except Exception as peer_err:
+                    logger.warning(f"Assistant client peer missing for chat {chat_id}: {peer_err}")
+                    try:
+                        invitelink = await app.export_chat_invite_link(chat_id)
+                        await pyro_client.join_chat(invitelink)
+                    except Exception as join_err:
+                        logger.warning(f"Assistant auto-join failed for {chat_id}: {join_err}")
 
-            media.time = 1
-            if getattr(message, "id", None):
+                try:
+                    await client.play(
+                        chat_id=chat_id,
+                        stream=stream,
+                        config=types.GroupCallConfig(auto_start=True),
+                    )
+                    self._stream_start_time[chat_id] = time.time()
+                except Exception as play_err:
+                    if "ChannelInvalid" in str(play_err) or "CHANNEL_INVALID" in str(play_err):
+                        logger.warning(f"client.play peer error in {chat_id}: {play_err}. Re-resolving via join_chat...")
+                        try:
+                            invitelink = await app.export_chat_invite_link(chat_id)
+                            await pyro_client.join_chat(invitelink)
+                            await client.play(
+                                chat_id=chat_id,
+                                stream=stream,
+                                config=types.GroupCallConfig(auto_start=True),
+                            )
+                            self._stream_start_time[chat_id] = time.time()
+                        except Exception as retry_err:
+                            raise retry_err
+                    else:
+                        raise play_err
+
+            if not seek_time:
+                media.time = 1
+                await db.add_call(chat_id)
+                _remember(chat_id, getattr(media, "id", None), getattr(media, "title", None))
+                asyncio.create_task(
+                    db.record_play(
+                        is_video=getattr(media, "video", False),
+                        chat_id=chat_id,
+                        user_id=getattr(media, "user_id", 0),
+                        video_id=getattr(media, "id", ""),
+                        title=getattr(media, "title", ""),
+                    )
+                )
+
+                # Shorten title to 50 characters max
+                short_title = media.title.split("|")[0].split("(")[0].strip()
+                if len(short_title) > 50:
+                    short_title = short_title[:47].rstrip() + "…"
+
+                text = _lang["play_media"].format(
+                    media.url,
+                    short_title,
+                    media.duration,
+                    media.user,
+                )
+
+                from ishu.helpers._inline import _panel_state
+                _panel_state[chat_id] = _panel_state.get(chat_id, {})
+                _panel_state[chat_id]["playing_caption"] = text
+
+                b_un = getattr(client, "username", None) or getattr(getattr(client, "me", None), "username", None) or app.username
+                keyboard = buttons.controls(
+                    chat_id,
+                    autoplay=await db.get_autoplay(chat_id),
+                    mode=await db.get_autoplay_mode(chat_id),
+                    link=media.url if (isinstance(media, Track) and getattr(media, "url", None)) else None,
+                    bot_username=b_un,
+                )
+
+                if _thumb:
+                    await message.edit_media(
+                        media=InputMediaPhoto(
+                            media=_thumb,
+                            caption=text,
+                            has_spoiler=True,
+                        ),
+                        reply_markup=keyboard,
+                    )
+                else:
+                    await message.edit_text(
+                        text,
+                        reply_markup=keyboard,
+                    )
+
+
+
                 media.message_id = message.id
-                _playing_messages[chat_id] = message.id
-            await db.add_call(chat_id)
-            _remember(chat_id, getattr(media, "id", None), getattr(media, "title", None))
+                if await db.get_autoplay(chat_id) and not queue.get_next(chat_id, check=True):
+                    asyncio.create_task(self._prefetch_autoplay(chat_id, media))
 
-            # Shorten title to 50 characters max
-            short_title = media.title.split("|")[0].split("(")[0].strip()
-            if len(short_title) > 50:
-                short_title = short_title[:47].rstrip() + "…"
-
-            text = _lang["play_media"].format(
-                media.url,
-                short_title,
-                media.duration,
-                media.user,
-            )
-
-            from ishu.helpers._inline import _panel_state
-            _panel_state[chat_id] = _panel_state.get(chat_id, {})
-            _panel_state[chat_id]["playing_caption"] = text
-
-            keyboard = buttons.controls(
-                chat_id,
-                autoplay=await db.get_autoplay(chat_id),
-                mode=await db.get_autoplay_mode(chat_id),
-                link=media.url if (isinstance(media, Track) and getattr(media, "url", None)) else None,
-            )
-
-            if _thumb:
-                await message.edit_media(
-                    media=InputMediaPhoto(
-                        media=_thumb,
-                        caption=text,
-                        has_spoiler=True,
-                    ),
-                    reply_markup=keyboard,
-                )
-            else:
-                await message.edit_text(
-                    text,
-                    reply_markup=keyboard,
-                )
-
-            media.message_id = message.id
-            if await db.get_autoplay(chat_id) and not queue.get_next(chat_id, check=True):
-                asyncio.create_task(self._prefetch_autoplay(chat_id, media))
+        except FileNotFoundError:
+            await message.edit_text(_lang["error_no_file"].format(config.SUPPORT_CHAT))
+            await self.play_next(chat_id)
+        except exceptions.NoActiveGroupCall:
+            await self.stop(chat_id)
+            await message.edit_text("ʙᴀʙᴜ ᴛᴀɴɪ ᴠᴏɪᴄᴇ ᴄʜᴀᴛ ᴄʜᴀʟᴜ ᴋᴀʀ")
+        except exceptions.NoAudioSourceFound:
+            await message.edit_text(_lang["error_no_audio"])
+            await self.play_next(chat_id)
+        except (ConnectionError, ConnectionNotFound, TelegramServerError):
+            await self.stop(chat_id)
+            await message.edit_text(_lang["error_tg_server"])
+        except RTMPStreamingUnsupported:
+            await self.stop(chat_id)
+            await message.edit_text(_lang["error_rtmp"])
+        except Exception as err:
+            logger.error(f"Playback exception in chat {chat_id}: {err}")
+            await self.stop(chat_id)
+            try:
+                if "ChannelInvalid" in str(err) or "CHANNEL_INVALID" in str(err):
+                    await message.edit_text(
+                        "<b>Playback Error:</b> <code>CHANNEL_INVALID</code>\n\n"
+                        "<i>Please make sure the Assistant account (userbot) is present in this group and promoted to admin!</i>"
+                    )
+                else:
+                    await message.edit_text(f"<b>Playback Error:</b> <code>{err}</code>")
+            except Exception:
+                pass
+            await self.play_next(chat_id)
 
 
     async def replay(self, chat_id: int) -> None:
@@ -662,19 +727,6 @@ class TgCall(PyTgCalls):
         if current_media:
             _cleanup_file(current_media)
 
-            # ── AUTO-DELETE: Remove the "now playing" message after track ends ──
-            if getattr(current_media, "message_id", None):
-                try:
-                    await app.delete_messages(
-                        chat_id=chat_id,
-                        message_ids=current_media.message_id,
-                        revoke=True,
-                    )
-                    logger.info("Auto-deleted playing message %s in chat %s", current_media.message_id, chat_id)
-                except Exception:
-                    pass
-                current_media.message_id = 0
-
         # ── Advance queue ─────────────────────────────────────────────────────
         media = queue.get_next(chat_id)
 
@@ -741,6 +793,28 @@ class TgCall(PyTgCalls):
         @client.on_update()
         async def update_handler(_, update: types.Update) -> None:
             if isinstance(update, types.StreamEnded):
+                duration = time.time() - self._stream_start_time.pop(update.chat_id, 0)
+                media = queue.get_current(update.chat_id)
+                if duration < 5.0 and media and isinstance(media, Track):
+                    logger.warning("Stream ended prematurely (%.1fs) for chat %s. Attempting fallback download/replay...", duration, update.chat_id)
+                    local_path = None
+                    for ext in ("m4a", "webm", "mp3", "mp4"):
+                        p = f"downloads/{media.id}.{ext}"
+                        if os.path.exists(p) and os.path.getsize(p) > 10000:
+                            local_path = p
+                            break
+                    if not local_path:
+                        try:
+                            local_path = await yt.download(media.id, video=getattr(media, "video", False))
+                        except Exception as dl_err:
+                            logger.error("Emergency fallback download failed: %s", dl_err)
+                    if local_path and os.path.exists(local_path):
+                        media.file_path = local_path
+                        try:
+                            await self.replay(update.chat_id)
+                            return
+                        except Exception as e:
+                            logger.error("Failed to replay stream: %s", e)
                 await self.play_next(update.chat_id)
             elif isinstance(update, types.ChatUpdate):
                 if update.status == types.ChatUpdate.Status.CLOSED_VOICE_CHAT:
