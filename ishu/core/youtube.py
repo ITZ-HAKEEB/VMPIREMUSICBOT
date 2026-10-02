@@ -324,22 +324,28 @@ def cookie_txt_file() -> str | None:
 
     Priority:
     1. Already resolved & cached (_COOKIE_PATH set).
-    2. Physical file at ishu/cookies/cookie_0.txt.
-    3. Decoded from YTDLP_COOKIES_BASE64 / YOUTUBE_COOKIES_BASE64 env var.
+    2. COOKIES_FILE or COOKIE_PATH environment variable (explicit path).
+    3. Decoded from YTDLP_COOKIES_BASE64 / YOUTUBE_COOKIES_BASE64 / COOKIES_BASE64 env var.
     4. Raw text from COOKIES_DATA env var.
+    5. Project root cookies.txt or cookie.txt.
+    6. cookies/ directory at project root (cookies/*.txt).
+    7. Physical file at ishu/cookies/cookie_0.txt.
+    8. Any other .txt file in ishu/cookies/.
     """
     global _COOKIE_PATH
     if _COOKIE_PATH is not None and os.path.exists(_COOKIE_PATH) and os.path.getsize(_COOKIE_PATH) > 0:
         return _COOKIE_PATH
 
+    # 1. Explicit env var file path
+    env_file = os.environ.get("COOKIES_FILE") or os.environ.get("COOKIE_PATH")
+    if env_file and os.path.exists(env_file) and os.path.getsize(env_file) > 0:
+        _COOKIE_PATH = os.path.abspath(env_file)
+        return _COOKIE_PATH
+
     base_dir = os.path.dirname(os.path.abspath(__file__))
+    root_dir = os.path.abspath(os.path.join(base_dir, "..", ".."))
     folder = os.path.abspath(os.path.join(base_dir, "..", "cookies"))
     primary = os.path.join(folder, "cookie_0.txt")
-
-    # 1. Physical file already present with valid content
-    if os.path.exists(primary) and os.path.getsize(primary) > 0:
-        _COOKIE_PATH = primary
-        return primary
 
     # 2. Decode from YTDLP_COOKIES_BASE64 env var
     b64 = os.environ.get("YTDLP_COOKIES_BASE64") or os.environ.get("YOUTUBE_COOKIES_BASE64") or os.environ.get("COOKIES_BASE64")
@@ -378,7 +384,27 @@ def cookie_txt_file() -> str | None:
         except Exception as e:
             logger.warning("cookie_txt_file: failed to write COOKIES_DATA: %s", e)
 
-    # 4. Any other .txt file in the cookies folder
+    # 4. Check project root for cookies.txt / cookie.txt
+    for root_candidate in ["cookies.txt", "cookie.txt"]:
+        cand_path = os.path.join(root_dir, root_candidate)
+        if os.path.exists(cand_path) and os.path.getsize(cand_path) > 0:
+            _COOKIE_PATH = cand_path
+            return cand_path
+
+    # 5. Check cookies/ directory at project root
+    root_cookies_dir = os.path.join(root_dir, "cookies")
+    if os.path.isdir(root_cookies_dir):
+        for f in glob.glob(os.path.join(root_cookies_dir, "*.txt")):
+            if os.path.getsize(f) > 0:
+                _COOKIE_PATH = f
+                return f
+
+    # 6. Physical file already present with valid content in ishu/cookies/
+    if os.path.exists(primary) and os.path.getsize(primary) > 0:
+        _COOKIE_PATH = primary
+        return primary
+
+    # 7. Any other .txt file in the ishu/cookies folder
     try:
         txt_files = glob.glob(os.path.join(folder, "*.txt"))
     except Exception:
