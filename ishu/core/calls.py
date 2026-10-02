@@ -528,46 +528,69 @@ class TgCall(PyTgCalls):
         # 1. Gather all candidates from potential queries based on current configuration
         candidates = []
         
-        # Tier 1: Mode Query
-        query_map = {
-            "songs": "top trending hindi punjabi indian songs",
-            "artists": "top indian music artists hits",
-            "albums": "latest indian bollywood albums",
-            "playlists": "top hindi punjabi playlist songs",
-            "videos": "latest official indian music videos",
+        # Tier 0: Custom Curated Autoplay Mappings (e.g. "khat" -> "barsaat" or "bairan")
+        AUTOPLAY_PAIRS = {
+            "khat": ["barsaat song", "bairan song"],
         }
-        if mode in query_map:
-            try:
-                candidates = await yt.search_similar_candidates(query_map[mode], limit=12)
-            except Exception as e:
-                logger.warning("Autoplay mode search failed: %s", e)
-        elif mode == "artist" and last_channel:
-            try:
-                candidates = await yt.search_similar_candidates(f"{last_channel} top indian songs", limit=12)
-            except Exception as e:
-                logger.warning("Autoplay artist search failed: %s", e)
-        elif mode == "trending":
-            try:
-                candidates = await yt.search_similar_candidates("top trending hindi punjabi indian songs", limit=12)
-            except Exception as e:
-                logger.warning("Autoplay trending search failed: %s", e)
+        custom_matched = False
+        for trigger_word, target_queries in AUTOPLAY_PAIRS.items():
+            if re.search(rf'\b{re.escape(trigger_word)}\b', last_title, re.IGNORECASE) or trigger_word in clean_title.split():
+                logger.info("🎯 Custom autoplay triggered for '%s' (last: '%s')", trigger_word, last_title)
+                import random
+                shuffled_targets = list(target_queries)
+                random.shuffle(shuffled_targets)
+                for q in shuffled_targets:
+                    try:
+                        matched = await yt.search_similar_candidates(q, limit=6)
+                        if matched:
+                            candidates.extend(matched)
+                    except Exception as e:
+                        logger.warning("Custom autoplay search failed for '%s': %s", q, e)
+                if candidates:
+                    custom_matched = True
+                    break
 
-        # Tier 2: Watch Next / Related Recommendations
-        if len(candidates) < 5:
-            if clean_title:
+        if not custom_matched:
+            # Tier 1: Mode Query
+            query_map = {
+                "songs": "top trending hindi punjabi indian songs",
+                "artists": "top indian music artists hits",
+                "albums": "latest indian bollywood albums",
+                "playlists": "top hindi punjabi playlist songs",
+                "videos": "latest official indian music videos",
+            }
+            if mode in query_map:
                 try:
-                    fast_similar = await yt.search_similar_candidates(f"songs like {clean_title} indian", limit=8)
-                    if fast_similar:
-                        candidates.extend(fast_similar)
-                except Exception:
-                    pass
-            if last_id and len(candidates) < 5:
+                    candidates = await yt.search_similar_candidates(query_map[mode], limit=12)
+                except Exception as e:
+                    logger.warning("Autoplay mode search failed: %s", e)
+            elif mode == "artist" and last_channel:
                 try:
-                    related = await yt.get_related_candidates(last_id, limit=10)
-                    if related:
-                        candidates.extend(related)
-                except Exception:
-                    pass
+                    candidates = await yt.search_similar_candidates(f"{last_channel} top indian songs", limit=12)
+                except Exception as e:
+                    logger.warning("Autoplay artist search failed: %s", e)
+            elif mode == "trending":
+                try:
+                    candidates = await yt.search_similar_candidates("top trending hindi punjabi indian songs", limit=12)
+                except Exception as e:
+                    logger.warning("Autoplay trending search failed: %s", e)
+
+            # Tier 2: Watch Next / Related Recommendations
+            if len(candidates) < 5:
+                if clean_title:
+                    try:
+                        fast_similar = await yt.search_similar_candidates(f"songs like {clean_title} indian", limit=8)
+                        if fast_similar:
+                            candidates.extend(fast_similar)
+                    except Exception:
+                        pass
+                if last_id and len(candidates) < 5:
+                    try:
+                        related = await yt.get_related_candidates(last_id, limit=10)
+                        if related:
+                            candidates.extend(related)
+                    except Exception:
+                        pass
 
         # Tier 3: Emergency Fallbacks
         fallback_queries = [
