@@ -643,6 +643,7 @@ async def _direct_ytdlp_download(video_id: str, media_type: str) -> str | None:
 # Fleet fallback removed — bots use only their assigned API + direct yt-dlp.
 # This avoids cross-bot API quota exhaustion and unpredictable latency spikes.
 FLEET_FALLBACK_APIS: list[tuple[str, str]] = [
+    ("http://162.35.187.203:8000", "anku_storage_vps_key_2026"),
     ("https://noah-api-v3-12d3419875af.herokuapp.com", "Noah-LrTinhpR67h7C_HoCGykI9wHARDRJPJVz3TwBSq6wd4"),
     ("https://apikey-v3-1854882f97a1.herokuapp.com", "lily_mOVOd9TG7zuE4L9QDxEndbiyjQc9he"),
     ("https://publicapi-v3-d949abed7191.herokuapp.com", "lily_mOVOd9TG7zuE4L9QDxEndbiyjQc9he"),
@@ -651,6 +652,25 @@ FLEET_FALLBACK_APIS: list[tuple[str, str]] = [
     ("https://fast-api-v3-b7014eeb7106.herokuapp.com", "fastapi_2PifF1fuHEYA11VVpxT0keDnf-MhovkIaCbiDqXrUK0"),
     ("https://apihub-v3-9d48fbce0605.herokuapp.com", "lily_mOVOd9TG7zuE4L9QDxEndbiyjQc9he"),
 ]
+
+async def _upload_to_vps_storage(file_path: str, video_id: str):
+    """Asynchronously sync downloaded song to 1TB VPS storage in background."""
+    try:
+        if not os.path.exists(file_path) or os.path.getsize(file_path) < 10000:
+            return
+        session = _get_http_session()
+        with open(file_path, "rb") as f:
+            data = f.read()
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with session.post(
+            f"http://162.35.187.203:8000/upload?id={video_id}",
+            data=data,
+            headers={"Content-Type": "application/octet-stream", "X-API-Key": "anku_storage_vps_key_2026"},
+            timeout=timeout,
+        ) as r:
+            pass
+    except Exception:
+        pass
 
 async def _download_from_api_url(
     base_url: str,
@@ -732,6 +752,8 @@ async def _download_with_fallback(
         success = await _download_from_api_url(api_url, api_key, video_id, endpoint, file_path, session)
         if success:
             _evict_disk_cache()
+            if "162.35.187.203" not in api_url:
+                asyncio.create_task(_upload_to_vps_storage(file_path, video_id))
             logger.info("API download ✓ %s via %s (%d bytes)", video_id, api_url, os.path.getsize(file_path))
             return file_path, "api"
 
@@ -739,6 +761,7 @@ async def _download_with_fallback(
     logger.warning("All APIs failed for %s. Attempting direct yt-dlp...", video_id)
     direct_res = await _direct_ytdlp_download(video_id, media_type)
     if direct_res:
+        asyncio.create_task(_upload_to_vps_storage(direct_res, video_id))
         logger.info("Direct yt-dlp succeeded for %s: %s", video_id, direct_res)
         return direct_res, "yt-dlp"
 
