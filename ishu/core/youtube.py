@@ -619,11 +619,11 @@ async def _direct_ytdlp_download(video_id: str, media_type: str) -> str | None:
 FLEET_FALLBACK_APIS: list[tuple[str, str]] = [
     ("https://noah-api-v3-12d3419875af.herokuapp.com", "Noah-LrTinhpR67h7C_HoCGykI9wHARDRJPJVz3TwBSq6wd4"),
     ("https://apikey-v3-1854882f97a1.herokuapp.com", "lily_mOVOd9TG7zuE4L9QDxEndbiyjQc9he"),
+    ("https://publicapi-v3-d949abed7191.herokuapp.com", "lily_mOVOd9TG7zuE4L9QDxEndbiyjQc9he"),
     ("https://panda-api-v3-6e9434966ef9.herokuapp.com", "panda_qpyudLY8bF8rFt69yK-fbLU5wQSO1nHK9H4GixjYNTY"),
     ("https://titanic-api-v3-01462a8481af.herokuapp.com", "titanic_lhQkzaBhIQTwpquq_XBIfBI52wtN49fhdTOBBBkfLNo"),
     ("https://fast-api-v3-b7014eeb7106.herokuapp.com", "fastapi_2PifF1fuHEYA11VVpxT0keDnf-MhovkIaCbiDqXrUK0"),
     ("https://apihub-v3-9d48fbce0605.herokuapp.com", "lily_mOVOd9TG7zuE4L9QDxEndbiyjQc9he"),
-    ("https://publicapi-v3-d949abed7191.herokuapp.com", "lily_mOVOd9TG7zuE4L9QDxEndbiyjQc9he"),
 ]
 
 async def _download_from_api_url(
@@ -652,16 +652,16 @@ async def _download_from_api_url(
                 with open(file_path, "wb") as f:
                     async for chunk in resp.content.iter_chunked(512 * 1024):
                         f.write(chunk)
-                if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
+                if os.path.exists(file_path) and os.path.getsize(file_path) > 10000:
                     return True
                 else:
-                    logger.warning("API download from %s returned 0 bytes for %s", base_url, video_id)
+                    logger.warning("API download from %s returned too few/0 bytes for %s (%d bytes)", base_url, video_id, os.path.getsize(file_path) if os.path.exists(file_path) else 0)
             else:
                 logger.warning("API download status %s from %s for %s", resp.status, base_url, video_id)
     except Exception as e:
         logger.warning("API download from %s failed for %s: %s", base_url, video_id, e)
     finally:
-        if os.path.exists(file_path) and os.path.getsize(file_path) == 0:
+        if os.path.exists(file_path) and os.path.getsize(file_path) < 10000:
             try:
                 os.remove(file_path)
             except OSError:
