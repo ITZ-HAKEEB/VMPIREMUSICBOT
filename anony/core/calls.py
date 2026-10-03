@@ -239,6 +239,32 @@ class TgCall(PyTgCalls):
             await self.stop(chat_id)
             await message.edit_text(_lang["error_no_call"])
         except exceptions.NoAudioSourceFound:
+            logger.warning(f"NoAudioSourceFound for {getattr(media, 'id', '?')}; forcing cookie download fallback...")
+            try:
+                dl_path = await self.download_track(media)
+                if dl_path and Path(dl_path).exists() and Path(dl_path).stat().st_size > 1024:
+                    media.file_path = dl_path
+                    stream = types.MediaStream(
+                        media_path=dl_path,
+                        audio_parameters=types.AudioQuality.HIGH,
+                        video_parameters=types.VideoQuality.HD_720p,
+                        audio_flags=types.MediaStream.Flags.REQUIRED,
+                        video_flags=(
+                            types.MediaStream.Flags.AUTO_DETECT
+                            if media.video
+                            else types.MediaStream.Flags.IGNORE
+                        ),
+                        ffmpeg_parameters=f"-ss {seek_time}" if seek_time > 1 else None,
+                    )
+                    await client.play(
+                        chat_id=chat_id,
+                        stream=stream,
+                        config=types.GroupCallConfig(auto_start=False),
+                    )
+                    return
+            except Exception as dl_err:
+                logger.warning(f"Fallback download play failed: {dl_err}")
+
             await message.edit_text(_lang["error_no_audio"])
             await self.play_next(chat_id)
         except (ConnectionError, ConnectionNotFound, TelegramServerError,

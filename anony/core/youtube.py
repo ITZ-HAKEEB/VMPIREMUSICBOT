@@ -564,31 +564,8 @@ class YouTube:
         if vps_stream:
             return vps_stream
 
-        # 3. Live yt-dlp direct stream extraction
-        url = self.base + video_id
-        cookie = self.get_cookies()
-        base_opts = {
-            "format": "bestaudio/best" if not video else "best[height<=?720]",
-            "quiet": True,
-            "noplaylist": True,
-            "geo_bypass": True,
-            "no_warnings": True,
-            "logger": DummyLogger(),
-            "nocheckcertificate": True,
-            "cookiefile": cookie,
-            "remote_components": ["ejs:github"],
-        }
-
-        def _extract():
-            with yt_dlp.YoutubeDL(base_opts) as ydl:
-                try:
-                    info = ydl.extract_info(url, download=False)
-                    if info:
-                        return info.get("url")
-                except Exception as ex:
-                    logger.warning("Stream URL extraction failed: %s", ex)
-            return None
-
-        return await asyncio.to_thread(_extract)
+        # Do not return raw googlevideo links because FFmpeg fails with 403 on unauthenticated streams.
+        # Returning None forces play/calls to trigger reliable cookie-based download_track!
+        return None
 
 

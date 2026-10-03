@@ -126,15 +126,17 @@ async def play_hndlr(
             return
 
     if not file.file_path:
-        fname = f"downloads/{file.id}.{'mp4' if video else 'webm'}"
-        if Path(fname).exists() and Path(fname).stat().st_size > 1024:
-            file.file_path = fname
-        else:
-            # Live stream playback for new songs!
+        for ext_cand in (["mp4", "webm"] if video else ["webm", "mp3", "m4a", "opus", "mp4"]):
+            fname = f"downloads/{file.id}.{ext_cand}"
+            if Path(fname).exists() and Path(fname).stat().st_size > 1024:
+                file.file_path = fname
+                break
+
+        if not file.file_path:
+            # Check 1TB VPS stream
             stream_url = await yt.get_stream_url(file.id, video=video)
             if stream_url:
                 file.file_path = stream_url
-                # Concurrently download in background to local storage for future 0ms instant playback
                 anon.queue_download(file)
             else:
                 if m.lang.get("play_downloading") != m.lang.get("play_searching"):
