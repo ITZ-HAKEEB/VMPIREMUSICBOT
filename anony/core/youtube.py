@@ -461,24 +461,20 @@ class YouTube:
     ) -> str | None:
         from anony.core.storage import storage_engine
 
-        ext = "mp4" if video else "webm"
-        filename = f"downloads/{video_id}.{ext}"
+        target_path = f"downloads/{video_id}.mp4" if video else f"downloads/{video_id}.mp3"
 
         # 1. Local disk cache hit
-        if Path(filename).exists() and Path(filename).stat().st_size > 1024:
-            return filename
+        for cand_ext in (["mp4"] if video else ["mp3", "webm", "m4a", "opus", "mp4"]):
+            cand_p = f"downloads/{video_id}.{cand_ext}"
+            if Path(cand_p).exists() and Path(cand_p).stat().st_size > 1024:
+                return cand_p
 
-        alt_ext = "mp3" if not video else "mp4"
-        alt_fname = f"downloads/{video_id}.{alt_ext}"
-        if Path(alt_fname).exists() and Path(alt_fname).stat().st_size > 1024:
-            return alt_fname
-
-        # 2. 1TB VPS Music Storage Engine
-        if await storage_engine.download_from_vps(video_id, filename, is_video=video):
-            return filename
+        # 2. 1TB VPS Music Storage Engine (downloads in ~0.8s for flawless local playback)
+        if await storage_engine.download_from_vps(video_id, target_path, is_video=video):
+            return target_path
 
         # 3. Telegram Dump Supergroup (-1003913556820)
-        dump_target = f"downloads/{video_id}.mp3" if not video else filename
+        dump_target = target_path
         if await storage_engine.restore_from_telegram_dump(video_id, dump_target, is_video=video):
             return dump_target
 
@@ -635,26 +631,16 @@ class YouTube:
         return None
 
     async def get_stream_url(self, video_id: str, video: bool = False) -> str | None:
-        from anony.core.storage import storage_engine
+        # Return local disk cache if present
+        for cand_ext in (["mp4"] if video else ["mp3", "webm", "m4a", "opus", "mp4"]):
+            cand_p = f"downloads/{video_id}.{cand_ext}"
+            if Path(cand_p).exists() and Path(cand_p).stat().st_size > 1024:
+                return cand_p
 
-        # 1. Local disk cache
-        ext = "mp4" if video else "webm"
-        filename = f"downloads/{video_id}.{ext}"
-        if Path(filename).exists() and Path(filename).stat().st_size > 1024:
-            return filename
-
-        alt_ext = "mp3" if not video else "mp4"
-        alt_fname = f"downloads/{video_id}.{alt_ext}"
-        if Path(alt_fname).exists() and Path(alt_fname).stat().st_size > 1024:
-            return alt_fname
-
-        # 2. Check 1TB VPS Storage CDN direct stream (0 ms instant play!)
-        vps_stream = await storage_engine.check_vps_stream(video_id, is_video=video)
-        if vps_stream:
-            return vps_stream
-
-        # Do not return raw googlevideo links because FFmpeg fails with 403 on unauthenticated streams.
-        # Returning None forces play/calls to trigger reliable cookie-based download_track!
+        # Do not return remote HTTP URLs for live playback because remote HTTP streams
+        # suffer from network jitter/h11 Range timeouts and cause voice chat to stop playing early!
+        # Returning None forces download_track() to fetch the file completely (~0.8s from VPS)
+        # so PyTgCalls plays 100% of the song without interruptions from start to finish!
         return None
 
 

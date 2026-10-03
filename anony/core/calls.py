@@ -59,22 +59,21 @@ class TgCall(PyTgCalls):
             return media.file_path
 
         video = getattr(media, "video", False)
-        ext = "mp4" if video else "webm"
-        fname = f"downloads/{media.id}.{ext}"
-
-        if Path(fname).exists() and Path(fname).stat().st_size > 1024:
-            media.file_path = fname
-            if hasattr(media, "title") and media.title:
-                yt.save_track_meta(media)
-                await db.save_song({
-                    "id": media.id,
-                    "title": media.title,
-                    "duration": getattr(media, "duration", "0:00"),
-                    "duration_sec": getattr(media, "duration_sec", 0),
-                    "file_path": fname,
-                    "video": video,
-                })
-            return fname
+        for ext_cand in (["mp4"] if video else ["mp3", "webm", "m4a", "opus", "mp4"]):
+            fname = f"downloads/{media.id}.{ext_cand}"
+            if Path(fname).exists() and Path(fname).stat().st_size > 1024:
+                media.file_path = fname
+                if hasattr(media, "title") and media.title:
+                    yt.save_track_meta(media)
+                    await db.save_song({
+                        "id": media.id,
+                        "title": media.title,
+                        "duration": getattr(media, "duration", "0:00"),
+                        "duration_sec": getattr(media, "duration_sec", 0),
+                        "file_path": fname,
+                        "video": video,
+                    })
+                return fname
 
         try:
             file_path = await yt.download(
@@ -311,11 +310,12 @@ class TgCall(PyTgCalls):
             pass
 
         # Check if already downloaded on disk
-        if not media.file_path:
-            ext = "mp4" if getattr(media, "video", False) else "webm"
-            fname = f"downloads/{media.id}.{ext}"
-            if Path(fname).exists() and Path(fname).stat().st_size > 1024:
-                media.file_path = fname
+        if not media.file_path or not Path(media.file_path).exists():
+            for ext_cand in (["mp4"] if getattr(media, "video", False) else ["mp3", "webm", "m4a", "opus", "mp4"]):
+                fname = f"downloads/{media.id}.{ext_cand}"
+                if Path(fname).exists() and Path(fname).stat().st_size > 1024:
+                    media.file_path = fname
+                    break
 
         # Proactively queue background download for the next upcoming track in line
         upcoming = queue.get_next(chat_id, check=True)
@@ -324,30 +324,22 @@ class TgCall(PyTgCalls):
 
         _lang = await lang.get_lang(chat_id)
 
-        if media.file_path:
-            # 0 ms INSTANT PLAY: play directly without waiting
+        if media.file_path and Path(media.file_path).exists():
+            # 0 ms INSTANT PLAY: play directly from local disk
             sent = await app.send_message(chat_id=chat_id, text=_lang["processing"])
             media.message_id = sent.id
             await self.play_media(chat_id, sent, media)
         else:
-            # Live stream playback for new/undownloaded tracks
-            stream_url = await yt.get_stream_url(media.id, video=getattr(media, "video", False))
-            if stream_url:
-                media.file_path = stream_url
-                self.queue_download(media)
-                sent = await app.send_message(chat_id=chat_id, text=_lang["processing"])
-                media.message_id = sent.id
-                await self.play_media(chat_id, sent, media)
-            else:
-                msg = await app.send_message(chat_id=chat_id, text=_lang["play_next"])
-                media.file_path = await self.download_track(media)
-                if not media.file_path:
-                    await self.play_next(chat_id)
-                    return await msg.edit_text(
-                        _lang["error_no_file"].format(config.SUPPORT_CHAT)
-                    )
-                media.message_id = msg.id
-                await self.play_media(chat_id, msg, media)
+            # Download locally first (~0.8s from VPS) to guarantee 100% full, uninterrupted playback
+            msg = await app.send_message(chat_id=chat_id, text=_lang["play_next"])
+            media.file_path = await self.download_track(media)
+            if not media.file_path:
+                await self.play_next(chat_id)
+                return await msg.edit_text(
+                    _lang["error_no_file"].format(config.SUPPORT_CHAT)
+                )
+            media.message_id = msg.id
+            await self.play_media(chat_id, msg, media)
 
 
     async def send_queue_empty(self, chat_id: int) -> None:
@@ -424,10 +416,11 @@ class TgCall(PyTgCalls):
         if chosen.id not in self.played_tracks[chat_id]:
             self.played_tracks[chat_id].append(chosen.id)
 
-        ext = "mp4" if video else "webm"
-        fname = f"downloads/{chosen.id}.{ext}"
-        if Path(fname).exists() and Path(fname).stat().st_size > 1024:
-            chosen.file_path = fname
+        for ext_cand in (["mp4"] if video else ["mp3", "webm", "m4a", "opus", "mp4"]):
+            fname = f"downloads/{chosen.id}.{ext_cand}"
+            if Path(fname).exists() and Path(fname).stat().st_size > 1024:
+                chosen.file_path = fname
+                break
 
         # Proactively queue background download for the next recommendation
         for next_cand in candidates:

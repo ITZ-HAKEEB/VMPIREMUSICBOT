@@ -125,26 +125,20 @@ async def play_hndlr(
                 )
             return
 
-    if not file.file_path:
-        for ext_cand in (["mp4", "webm"] if video else ["webm", "mp3", "m4a", "opus", "mp4"]):
+    if not file.file_path or not Path(file.file_path).exists():
+        for ext_cand in (["mp4"] if video else ["mp3", "webm", "m4a", "opus", "mp4"]):
             fname = f"downloads/{file.id}.{ext_cand}"
             if Path(fname).exists() and Path(fname).stat().st_size > 1024:
                 file.file_path = fname
                 break
 
         if not file.file_path:
-            # Check 1TB VPS stream
-            stream_url = await yt.get_stream_url(file.id, video=video)
-            if stream_url:
-                file.file_path = stream_url
-                anon.queue_download(file)
-            else:
-                if m.lang.get("play_downloading") != m.lang.get("play_searching"):
-                    try:
-                        await sent.edit_text(m.lang["play_downloading"])
-                    except Exception:
-                        pass
-                file.file_path = await anon.download_track(file)
+            if m.lang.get("play_downloading") != m.lang.get("play_searching"):
+                try:
+                    await sent.edit_text(m.lang["play_downloading"])
+                except Exception:
+                    pass
+            file.file_path = await anon.download_track(file)
 
     await anon.play_media(chat_id=m.chat.id, message=sent, media=file)
     if not tracks:
