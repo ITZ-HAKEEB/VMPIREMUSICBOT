@@ -135,16 +135,35 @@ class StorageEngine:
             return
         try:
             caption = f"🎵 **{title or video_id}**\n🆔 `{video_id}`"
-            if is_video:
-                msg = await app.send_video(self.dump_channel, video=file_path, caption=caption)
-                file_id = msg.video.file_id if msg and msg.video else ""
-            else:
-                msg = await app.send_audio(
-                    self.dump_channel, audio=file_path, caption=caption, title=title or video_id, duration=duration
-                )
-                file_id = msg.audio.file_id if msg and msg.audio else ""
+            msg = None
+            try:
+                if is_video:
+                    msg = await app.send_video(self.dump_channel, video=file_path, caption=caption)
+                else:
+                    msg = await app.send_audio(
+                        self.dump_channel, audio=file_path, caption=caption, title=title or video_id, duration=duration
+                    )
+            except Exception as bot_err:
+                logger.debug(f"Bot dump upload error ({bot_err}); trying assistant session...")
+                from anony import userbot
+                if userbot.clients:
+                    ub = userbot.clients[0]
+                    if is_video:
+                        msg = await ub.send_video(self.dump_channel, video=file_path, caption=caption)
+                    else:
+                        msg = await ub.send_audio(
+                            self.dump_channel, audio=file_path, caption=caption, title=title or video_id, duration=duration
+                        )
 
             if msg and msg.id:
+                file_id = ""
+                if is_video and getattr(msg, "video", None):
+                    file_id = msg.video.file_id
+                elif getattr(msg, "audio", None):
+                    file_id = msg.audio.file_id
+                elif getattr(msg, "document", None):
+                    file_id = msg.document.file_id
+
                 await db.save_music_cache(
                     video_id=video_id,
                     title=title or video_id,

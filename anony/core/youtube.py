@@ -39,6 +39,7 @@ class YouTube:
         self.tracks_cache: dict[str, dict] = {}
         self.query_cache: dict[str, str] = {}
         self._load_cache()
+        self.get_cookies()
         self.regex = re.compile(
             r"(https?://)?(www\.|m\.|music\.)?"
             r"(youtube\.com/(watch\?v=|shorts/|playlist\?list=)|youtu\.be/)"
@@ -205,6 +206,7 @@ class YouTube:
                         if os.path.getsize(full_path) > 10:
                             self.cookies.append(full_path)
             self.checked = True
+            logger.info(f"Loaded {len(self.cookies)} cookie file(s) for YouTube downloads.")
         if not self.cookies:
             if not self.warned:
                 self.warned = True
@@ -502,18 +504,24 @@ class YouTube:
         else:
             ydl_opts = {
                 **base_opts,
-                "format": "bestaudio[ext=webm][acodec=opus]",
+                "format": "bestaudio[ext=webm][acodec=opus]/bestaudio/best",
             }
 
         def _download():
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 try:
                     ydl.download([url])
-                    return filename
-                except (yt_dlp.utils.DownloadError, yt_dlp.utils.ExtractorError):
+                    for candidate_ext in ["webm", "mp4", "m4a", "opus", "mp3"]:
+                        candidate_path = f"downloads/{video_id}.{candidate_ext}"
+                        if Path(candidate_path).exists() and Path(candidate_path).stat().st_size > 1024:
+                            logger.info(f"[LIVE YT DOWNLOAD] Done: {video_id} -> {candidate_path}")
+                            return candidate_path
+                    return filename if Path(filename).exists() else None
+                except (yt_dlp.utils.DownloadError, yt_dlp.utils.ExtractorError) as e:
+                    logger.warning(f"Download extractor error for {video_id}: {e}")
                     return None
                 except Exception as ex:
-                    logger.warning("Download failed: %s", ex)
+                    logger.warning(f"Download failed for {video_id}: {ex}")
                     return None
 
         res = await asyncio.to_thread(_download)
