@@ -33,7 +33,7 @@ class StorageEngine:
         url = f"{self.vps_url}/{ep}?id={video_id}"
         try:
             session = await self._get_session()
-            timeout = aiohttp.ClientTimeout(total=2.5)
+            timeout = aiohttp.ClientTimeout(connect=2, total=4)
             async with session.head(url, timeout=timeout) as resp:
                 if resp.status == 200:
                     logger.info(f"[VPS HIT] Direct stream URL ready for {video_id}")
@@ -50,7 +50,7 @@ class StorageEngine:
         url = f"{self.vps_url}/{ep}?id={video_id}"
         try:
             session = await self._get_session()
-            timeout = aiohttp.ClientTimeout(total=30)
+            timeout = aiohttp.ClientTimeout(connect=4, total=30)
             async with session.get(url, timeout=timeout) as resp:
                 if resp.status == 200:
                     Path(dest_path).parent.mkdir(parents=True, exist_ok=True)
@@ -60,8 +60,10 @@ class StorageEngine:
                     if Path(dest_path).exists() and Path(dest_path).stat().st_size > 1024:
                         logger.info(f"[VPS DOWNLOAD] Restored {video_id} to {dest_path}")
                         return True
+                else:
+                    logger.debug(f"VPS does not have {video_id} yet (status {resp.status})")
         except Exception as e:
-            logger.warning(f"VPS download failed for {video_id}: {e}")
+            logger.warning(f"VPS download failed for {video_id}: {type(e).__name__}: {e}")
         return False
 
     async def restore_from_telegram_dump(self, video_id: str, dest_path: str, is_video: bool = False) -> bool:

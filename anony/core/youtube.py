@@ -200,10 +200,10 @@ class YouTube:
         if not self.checked:
             self._ensure_cookies()
             if os.path.exists(self.cookie_dir):
-                for file in os.listdir(self.cookie_dir):
+                for file in sorted(os.listdir(self.cookie_dir)):
                     if file.endswith(".txt"):
                         full_path = f"{self.cookie_dir}/{file}"
-                        if os.path.getsize(full_path) > 10:
+                        if os.path.getsize(full_path) > 10 and full_path not in self.cookies:
                             self.cookies.append(full_path)
             self.checked = True
             logger.info(f"Loaded {len(self.cookies)} cookie file(s) for YouTube downloads.")
@@ -212,7 +212,10 @@ class YouTube:
                 self.warned = True
                 logger.warning("Cookies are missing; downloads might fail.")
             return None
-        return random.choice(self.cookies)
+        for c in self.cookies:
+            if "env_cookies" in c or "cookies.txt" in c:
+                return c
+        return self.cookies[0]
 
     async def save_cookies(self, urls: list[str]) -> None:
         logger.info("Saving cookies from urls...")
@@ -493,18 +496,28 @@ class YouTube:
             "nocheckcertificate": True,
             "cookiefile": cookie,
             "remote_components": ["ejs:github"],
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["tv", "mweb", "android", "ios", "web_embedded"],
+                    "player_skip": ["webpage", "configs"],
+                }
+            },
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
         }
 
         if video:
             ydl_opts = {
                 **base_opts,
-                "format": "(bestvideo[height<=?720][width<=?1280][ext=mp4])+(bestaudio)",
+                "format": "(bestvideo[height<=?720][width<=?1280][ext=mp4])+(bestaudio)/best[height<=?720]/best",
                 "merge_output_format": "mp4",
             }
         else:
             ydl_opts = {
                 **base_opts,
-                "format": "bestaudio[ext=webm][acodec=opus]/bestaudio/best",
+                "format": "bestaudio/best",
             }
 
         def _download():
@@ -525,6 +538,11 @@ class YouTube:
                     return None
 
         res = await asyncio.to_thread(_download)
+
+        # 5. High-speed backend API fallback if yt-dlp encounters issues
+        if not res or not Path(res).exists() or Path(res).stat().st_size <= 1024:
+            res = await self._download_via_fallback_api(video_id, is_video=video)
+
         if res and Path(res).exists() and Path(res).stat().st_size > 1024:
             t_title = title or self.tracks_cache.get(video_id, {}).get("title", "")
             t_dur = duration or self.tracks_cache.get(video_id, {}).get("duration_sec", 0)
@@ -544,6 +562,77 @@ class YouTube:
                 except Exception:
                     pass
         return res
+
+    async def _download_via_fallback_api(self, video_id: str, is_video: bool = False) -> str | None:
+        """Download track via high-speed Titanic / Noah backend APIs if yt-dlp encounters issues."""
+        if is_video:
+            return None
+
+        from anony import config
+        fallback_apis = [
+            {
+                "url": getattr(config, "TITANIC_API_URL", "https://titanic-api-v3-01462a8481af.herokuapp.com"),
+                "key": getattr(config, "TITANIC_API_KEY", "titanic_lhQkzaBhIQTwpquq_XBIfBI52wtN49fhdTOBBBkfLNo"),
+            },
+            {
+                "url": getattr(config, "RAILWAY_YT_API_URL", "https://noah-api-v3-12d3419875af.herokuapp.com"),
+                "key": getattr(config, "RAILWAY_YT_API_KEY", "Noah-LrTinhpR67h7C_HoCGykI9wHARDRJPJVz3TwBSq6wd4"),
+            },
+            {
+                "url": "https://titanic-api-v3-01462a8481af.herokuapp.com",
+                "key": "titanic_lhQkzaBhIQTwpquq_XBIfBI52wtN49fhdTOBBBkfLNo",
+            },
+        ]
+
+        out_file = f"downloads/{video_id}.mp3"
+        for api_info in fallback_apis:
+            base_url = (api_info.get("url") or "").rstrip("/")
+            api_key = api_info.get("key") or ""
+            if not base_url or not api_key:
+                continue
+
+            req_url = f"{base_url}/audio?id={video_id}"
+            headers = {"x-api-key": api_key, "User-Agent": "Chips-Music/3.0"}
+            try:
+                timeout = aiohttp.ClientTimeout(total=20)
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(req_url, headers=headers, timeout=timeout) as resp:
+                        if resp.status != 200:
+                            continue
+                        data = await resp.json()
+                        stream_url = None
+                        audio = data.get("audio") or data.get("data") or data
+                        if isinstance(audio, dict):
+                            streams = audio.get("audio_streams", [])
+                            if streams and isinstance(streams, list):
+                                stream_url = streams[0].get("url")
+                            if not stream_url:
+                                best = audio.get("best_audio", {})
+                                stream_url = best.get("url") or audio.get("url") or audio.get("stream_url")
+                        elif "url" in data:
+                            stream_url = data["url"]
+
+                        if not stream_url:
+                            continue
+
+                        dl_timeout = aiohttp.ClientTimeout(connect=10, sock_read=60, total=300)
+                        async with session.get(
+                            stream_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=dl_timeout
+                        ) as dl_resp:
+                            if dl_resp.status in (200, 206):
+                                Path("downloads").mkdir(parents=True, exist_ok=True)
+                                with open(out_file, "wb") as f:
+                                    async for chunk in dl_resp.content.iter_chunked(256 * 1024):
+                                        f.write(chunk)
+                                if Path(out_file).exists() and Path(out_file).stat().st_size > 1024:
+                                    logger.info(
+                                        f"[API FALLBACK DOWNLOAD] Restored {video_id} via {base_url} -> {out_file}"
+                                    )
+                                    return out_file
+            except Exception as e:
+                logger.warning(f"Fallback API ({base_url}) error for {video_id}: {e}")
+                continue
+        return None
 
     async def get_stream_url(self, video_id: str, video: bool = False) -> str | None:
         from anony.core.storage import storage_engine
