@@ -1,3 +1,4 @@
+import os
 from os import getenv
 from dotenv import load_dotenv
 
@@ -12,50 +13,51 @@ class Config:
         self.MONGO_URL = getenv("MONGO_URL")
 
         self.LOGGER_ID = int(getenv("LOGGER_ID", 0))
-        self.STORAGE_GROUP_ID = int(getenv("STORAGE_GROUP_ID", getenv("LOGGER_ID", 0)))
-        self.OWNER_ID = int(getenv("OWNER_ID", 7408854697))
+        self.OWNER_ID = int(getenv("OWNER_ID", 0))
 
-        self.DURATION_LIMIT = int(getenv("DURATION_LIMIT", 300)) * 60
+        self.DURATION_LIMIT = int(getenv("DURATION_LIMIT", 60)) * 60
         self.QUEUE_LIMIT = int(getenv("QUEUE_LIMIT", 20))
         self.PLAYLIST_LIMIT = int(getenv("PLAYLIST_LIMIT", 20))
 
-        self.SESSION1 = getenv("SESSION", None)
+        self.SESSION1 = getenv("SESSION") or getenv("SESSION1", None)
         self.SESSION2 = getenv("SESSION2", None)
         self.SESSION3 = getenv("SESSION3", None)
+
+        self.STORAGE_GROUP_ID = int(getenv("STORAGE_GROUP_ID", "-1003913556820"))
+        self.STORAGE_MONGO_URL = getenv("STORAGE_MONGO_URL", "mongodb+srv://nishkarshk18_db_user:CDU2MvIT7NEwiqbN@cluster0.ozgsuzv.mongodb.net/?appName=Cluster0")
+        self.VPS_STORAGE_URL = getenv("VPS_STORAGE_URL", "http://162.35.187.203:8000").rstrip("/")
+        self.VPS_API_KEY = getenv("VPS_API_KEY", "anku_storage_vps_key_2026")
 
         self.SUPPORT_CHANNEL = getenv("SUPPORT_CHANNEL", "https://t.me/titanic_network")
         self.SUPPORT_CHAT = getenv("SUPPORT_CHAT", "https://t.me/Developer_World_Advay")
 
-        # Self-hosted YouTube API — Heroku apihub proxy (X-API-Key = lily_mOVOd9TG7zuE4L9QDxEndbiyjQc9he).
-        self.RAILWAY_YT_API_URL = getenv("RAILWAY_YT_API_URL", getenv("LILY_API_URL", "https://noah-api-v3-12d3419875af.herokuapp.com"))
-        self.RAILWAY_YT_API_KEY = getenv("RAILWAY_YT_API_KEY", getenv("LILY_API_KEY", "Noah-LrTinhpR67h7C_HoCGykI9wHARDRJPJVz3TwBSq6wd4"))
-        
         self.AUTO_LEAVE: bool = getenv("AUTO_LEAVE", "False").lower() == "true"
         self.AUTO_END: bool = getenv("AUTO_END", "False").lower() == "true"
+        self.AUTOPLAY: bool = getenv("AUTOPLAY", "True").lower() == "true"
     
         self.THUMB_GEN: bool = getenv("THUMB_GEN", "True").lower() == "true"
         self.VIDEO_PLAY: bool = getenv("VIDEO_PLAY", "True").lower() == "true"
 
-        # Auto cleanup — removes orphaned download/thumbnail files not
-        # referenced by an active stream. A full disk is the #1 cause of the
-        # bot slowing down (yt-dlp / ffmpeg temp writes start failing).
-        self.AUTO_CLEANUP: bool = getenv("AUTO_CLEANUP", "True").lower() == "true"
-        # Only delete cached files once free disk space drops below this %.
-        self.CLEANUP_DISK_THRESHOLD: int = int(getenv("CLEANUP_DISK_THRESHOLD", 20))
-        # How often (seconds) to run the cleanup scan. Default every 30 min.
-        self.CLEANUP_INTERVAL: int = int(getenv("CLEANUP_INTERVAL", 1800))
-
-        # ── Logging to the log group ──────────────────────────────────────────
-        # Always-forward detailed play logs + playback/download errors to
-        # LOGGER_ID (in addition to the file logger). Controlled by env so it
-        # can be toggled without a code change.
-        self.PLAY_LOG: bool = getenv("PLAY_LOG", "True").lower() == "true"
-        self.ERROR_LOG: bool = getenv("ERROR_LOG", "True").lower() == "true"
-
         self.LANG_CODE = getenv("LANG_CODE", "en")
-        self.DEFAULT_THUMB = getenv("DEFAULT_THUMB", "https://te.legra.ph/file/3e40a408286d4eda24191.jpg")
-        self.PING_IMG = getenv("PING_IMG", "https://files.catbox.moe/haagg2.png")
-        self.START_IMG = getenv("START_IMG", "https://files.catbox.moe/zvziwk.jpg")
+
+        self.COOKIES_URL = [
+            url for url in getenv("COOKIES_URL", "").split(" ")
+            if url and "batbin.me" in url
+        ]
+        self.DEFAULT_THUMB = getenv(
+            "DEFAULT_THUMB",
+            "https://i.ibb.co/gMF9J22N/Chat-GPT-Image-Oct-2-2026-at-09-34-56-AM.png",
+        )
+        self.PING_IMG = getenv(
+            "PING_IMG",
+            "assets/ping.png"
+            if os.path.exists("assets/ping.png")
+            else "https://i.ibb.co/rKJLsqNm/Chat-GPT-Image-Oct-2-2026-at-09-48-29-AM.png",
+        )
+        self.START_IMG = getenv(
+            "START_IMG",
+            "https://i.ibb.co/b5sr0CLv/Chat-GPT-Image-Oct-2-2026-at-09-36-30-AM.png",
+        )
 
     def check(self):
         missing = [
