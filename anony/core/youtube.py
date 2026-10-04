@@ -175,7 +175,12 @@ class YouTube:
         if raw_b64:
             try:
                 import base64
-                decoded = base64.b64decode(raw_b64.strip()).decode("utf-8", errors="ignore")
+                import gzip
+                raw_bytes = base64.b64decode(raw_b64.strip())
+                if raw_bytes.startswith(b"\x1f\x8b"):
+                    decoded = gzip.decompress(raw_bytes).decode("utf-8", errors="ignore")
+                else:
+                    decoded = raw_bytes.decode("utf-8", errors="ignore")
                 with open(f"{self.cookie_dir}/env_cookies.txt", "w", encoding="utf-8") as f:
                     f.write(decoded)
             except Exception as e:
@@ -600,8 +605,29 @@ class YouTube:
             if not base_url or not api_key:
                 continue
 
-            req_url = f"{base_url}/audio?id={video_id}"
             headers = {"x-api-key": api_key, "User-Agent": "Chips-Music/3.0"}
+
+            # Strategy A: Direct Complete Download endpoint (100% full song, cached on API)
+            complete_url = f"{base_url}/download/complete?id={video_id}"
+            try:
+                dl_timeout = aiohttp.ClientTimeout(connect=10, sock_read=60, total=300)
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(complete_url, headers=headers, timeout=dl_timeout) as dl_resp:
+                        if dl_resp.status == 200:
+                            Path("downloads").mkdir(parents=True, exist_ok=True)
+                            with open(out_file, "wb") as f:
+                                async for chunk in dl_resp.content.iter_chunked(256 * 1024):
+                                    f.write(chunk)
+                            if Path(out_file).exists() and Path(out_file).stat().st_size > 1024:
+                                logger.info(
+                                    f"[API COMPLETE DOWNLOAD] Restored {video_id} via {base_url} -> {out_file} ({Path(out_file).stat().st_size} bytes)"
+                                )
+                                return out_file
+            except Exception as e:
+                logger.warning(f"Complete download endpoint ({base_url}) error for {video_id}: {e}")
+
+            # Strategy B: /audio stream resolution fallback
+            req_url = f"{base_url}/audio?id={video_id}"
             try:
                 timeout = aiohttp.ClientTimeout(total=20)
                 async with aiohttp.ClientSession() as session:
