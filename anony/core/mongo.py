@@ -18,7 +18,7 @@ class MongoDB:
         """
         import certifi
         self.mongo = AsyncMongoClient(config.MONGO_URL, serverSelectionTimeoutMS=12500, tlsCAFile=certifi.where())
-        self.db = self.mongo.Anon
+        self.db = self.mongo.Yukki
 
         storage_url = config.STORAGE_MONGO_URL or config.MONGO_URL
         self.storage_mongo = AsyncMongoClient(storage_url, serverSelectionTimeoutMS=12500, tlsCAFile=certifi.where())
@@ -221,12 +221,18 @@ class MongoDB:
 
     # CHAT METHODS
     async def is_chat(self, chat_id: int) -> bool:
+        if not self.chats:
+            await self.get_chats()
         return chat_id in self.chats
 
     async def add_chat(self, chat_id: int) -> None:
         if not await self.is_chat(chat_id):
             self.chats.append(chat_id)
-            await self.chatsdb.insert_one({"_id": chat_id})
+            await self.chatsdb.update_one(
+                {"_id": chat_id},
+                {"$set": {"_id": chat_id}},
+                upsert=True,
+            )
 
     async def rm_chat(self, chat_id: int) -> None:
         if await self.is_chat(chat_id):
@@ -234,8 +240,28 @@ class MongoDB:
             await self.chatsdb.delete_one({"_id": chat_id})
 
     async def get_chats(self) -> list:
-        if not self.chats:
-            self.chats.extend([chat["_id"] async for chat in self.chatsdb.find()])
+        chats = set(self.chats)
+        try:
+            async for chat in self.chatsdb.find():
+                cid = chat.get("_id") if chat.get("_id") is not None else chat.get("chat_id")
+                if cid is not None:
+                    try:
+                        chats.add(int(cid))
+                    except (ValueError, TypeError):
+                        pass
+        except Exception as e:
+            logger.warning("Error fetching chatsdb: %s", e)
+        try:
+            async for chat in self.mongo.Anon.chats.find():
+                cid = chat.get("_id") if chat.get("_id") is not None else chat.get("chat_id")
+                if cid is not None:
+                    try:
+                        chats.add(int(cid))
+                    except (ValueError, TypeError):
+                        pass
+        except Exception:
+            pass
+        self.chats = list(chats)
         return self.chats
 
     # COMMAND DELETE
@@ -326,12 +352,18 @@ class MongoDB:
 
     # USER METHODS
     async def is_user(self, user_id: int) -> bool:
+        if not self.users:
+            await self.get_users()
         return user_id in self.users
 
     async def add_user(self, user_id: int) -> None:
         if not await self.is_user(user_id):
             self.users.append(user_id)
-            await self.usersdb.insert_one({"_id": user_id})
+            await self.usersdb.update_one(
+                {"_id": user_id},
+                {"$set": {"_id": user_id}},
+                upsert=True,
+            )
 
     async def rm_user(self, user_id: int) -> None:
         if await self.is_user(user_id):
@@ -339,54 +371,85 @@ class MongoDB:
             await self.usersdb.delete_one({"_id": user_id})
 
     async def get_users(self) -> list:
-        if not self.users:
-            self.users.extend([user["_id"] async for user in self.usersdb.find()])
+        users = set(self.users)
+        try:
+            async for user in self.usersdb.find():
+                uid = user.get("_id") if user.get("_id") is not None else user.get("user_id")
+                if uid is not None:
+                    try:
+                        users.add(int(uid))
+                    except (ValueError, TypeError):
+                        pass
+        except Exception as e:
+            logger.warning("Error fetching usersdb: %s", e)
+        try:
+            async for user in self.mongo.Anon.users.find():
+                uid = user.get("_id") if user.get("_id") is not None else user.get("user_id")
+                if uid is not None:
+                    try:
+                        users.add(int(uid))
+                    except (ValueError, TypeError):
+                        pass
+        except Exception:
+            pass
+        self.users = list(users)
         return self.users
 
-
     async def migrate_coll(self) -> None:
-        logger.info("Migrating users and chats from old collections...")
+        logger.info("Syncing users and chats from legacy and secondary collections...")
+        try:
+            async for user in self.db.tgusersdb.find():
+                _id = user.get("_id")
+                uid = _id if isinstance(_id, int) else int(user.get("user_id", 0))
+                if uid:
+                    await self.usersdb.update_one({"_id": uid}, {"$set": {"_id": uid}}, upsert=True)
+        except Exception:
+            pass
 
-        users, musers, mchats = [], [], []
-        seen_chats, seen_users = set(), set()
-        users.extend([user async for user in self.usersdb.find()])
-        users.extend([user async for user in self.db.tgusersdb.find()])
+        try:
+            async for chat in self.mongo.Anon.chats.find():
+                cid = chat.get("_id") or chat.get("chat_id")
+                if isinstance(cid, int):
+                    await self.chatsdb.update_one({"_id": cid}, {"$set": {"_id": cid, "title": chat.get("title")}}, upsert=True)
+            async for user in self.mongo.Anon.users.find():
+                uid = user.get("_id") or user.get("user_id")
+                if isinstance(uid, int):
+                    await self.usersdb.update_one({"_id": uid}, {"$set": {"_id": uid}}, upsert=True)
+        except Exception:
+            pass
 
-        for user in users:
-            _id = user.get("_id")
-            if isinstance(_id, int):
-                user_id = _id
-            else:
-                user_id = int(user.get("user_id"))
-
-            if user_id in seen_users:
-                continue
-            seen_users.add(user_id)
-            musers.append({"_id": user_id})
-
-        await self.usersdb.drop()
-        await self.db.tgusersdb.drop()
-        if musers:
-            await self.usersdb.insert_many(musers)
-
-        async for chat in self.chatsdb.find():
-            _id = chat.get("_id")
-            if isinstance(_id, int):
-                chat_id = _id
-            else:
-                chat_id = int(chat.get("chat_id"))
-
-            if chat_id in seen_chats:
-                continue
-            seen_chats.add(chat_id)
-            mchats.append({"_id": chat_id})
-
-        await self.chatsdb.drop()
-        if mchats:
-            await self.chatsdb.insert_many(mchats)
-
-        await self.cache.insert_one({"_id": "migrated"})
+        await self.cache.update_one({"_id": "migrated"}, {"$set": {"migrated": True}}, upsert=True)
         logger.info("Migration completed successfully.")
+
+    async def crawl_dialogs(self) -> int:
+        """Backfill chats collection with every group the userbot assistant is currently in."""
+        from pyrogram import enums
+        ChatType = enums.ChatType
+
+        count = 0
+        crawled_any = False
+        for ub in getattr(userbot, "clients", []):
+            try:
+                async for dialog in ub.get_dialogs():
+                    chat = dialog.chat
+                    if not chat or not chat.id:
+                        continue
+                    if chat.type not in (ChatType.SUPERGROUP, ChatType.GROUP):
+                        continue
+                    count += 1
+                    if not await self.is_chat(chat.id):
+                        self.chats.append(chat.id)
+                        await self.chatsdb.update_one(
+                            {"_id": chat.id},
+                            {"$set": {"_id": chat.id, "title": getattr(chat, "title", None)}},
+                            upsert=True,
+                        )
+                crawled_any = True
+            except Exception as e:
+                logger.warning("Dialog crawl failed for a userbot session: %s", e)
+        if crawled_any:
+            logger.info("Crawled dialogs: found %d groups.", count)
+        return count
 
     async def load_cache(self) -> None:
         doc = await self.cache.find_one({"_id": "migrated"})
@@ -397,7 +460,7 @@ class MongoDB:
         await self.get_users()
         await self.get_blacklisted(True)
         await self.get_logger()
-        logger.info("Database cache loaded.")
+        logger.info(f"Database cache loaded: {len(self.chats)} chats, {len(self.users)} users.")
 
     async def save_song(self, song_data: dict) -> None:
         """Save downloaded song metadata to database."""

@@ -28,6 +28,9 @@ class Config:
         self.VPS_STORAGE_URL = getenv("VPS_STORAGE_URL", "http://162.35.187.203:8000").rstrip("/")
         self.VPS_API_KEY = getenv("VPS_API_KEY", "anku_storage_vps_key_2026")
 
+        self.YT_API_URL = getenv("YT_API_URL") or getenv("FALLBACK_API_URL") or getenv("RAILWAY_YT_API_URL") or getenv("TITANIC_API_URL")
+        self.YT_API_KEY = getenv("YT_API_KEY") or getenv("FALLBACK_API_KEY") or getenv("RAILWAY_YT_API_KEY") or getenv("TITANIC_API_KEY")
+
         self.SUPPORT_CHANNEL = getenv("SUPPORT_CHANNEL", "https://t.me/titanic_network")
         self.SUPPORT_CHAT = getenv("SUPPORT_CHAT", "https://t.me/Developer_World_Advay")
 

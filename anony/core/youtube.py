@@ -565,20 +565,33 @@ class YouTube:
             return None
 
         from anony import config
-        fallback_apis = [
-            {
-                "url": getattr(config, "TITANIC_API_URL", "https://titanic-api-v3-01462a8481af.herokuapp.com"),
-                "key": getattr(config, "TITANIC_API_KEY", "titanic_lhQkzaBhIQTwpquq_XBIfBI52wtN49fhdTOBBBkfLNo"),
-            },
-            {
-                "url": getattr(config, "RAILWAY_YT_API_URL", "https://noah-api-v3-12d3419875af.herokuapp.com"),
-                "key": getattr(config, "RAILWAY_YT_API_KEY", "Noah-LrTinhpR67h7C_HoCGykI9wHARDRJPJVz3TwBSq6wd4"),
-            },
-            {
-                "url": "https://titanic-api-v3-01462a8481af.herokuapp.com",
-                "key": "titanic_lhQkzaBhIQTwpquq_XBIfBI52wtN49fhdTOBBBkfLNo",
-            },
+        candidates = []
+        seen = set()
+
+        # 1. Primary assigned API for this specific bot from env
+        primary_url = getattr(config, "YT_API_URL", None)
+        primary_key = getattr(config, "YT_API_KEY", None)
+        if primary_url and primary_key:
+            clean = primary_url.rstrip("/")
+            candidates.append({"url": clean, "key": primary_key, "name": "Assigned-Primary"})
+            seen.add(clean)
+
+        # 2. Ranked active fleet API pool (fail-safe backups)
+        api_pool = [
+            {"name": "Noah", "url": "https://noah-api-v3-12d3419875af.herokuapp.com", "key": "Noah-LrTinhpR67h7C_HoCGykI9wHARDRJPJVz3TwBSq6wd4"},
+            {"name": "Titanic", "url": "https://titanic-api-v3-01462a8481af.herokuapp.com", "key": "titanic_lhQkzaBhIQTwpquq_XBIfBI52wtN49fhdTOBBBkfLNo"},
+            {"name": "Panda", "url": "https://panda-api-v3-6e9434966ef9.herokuapp.com", "key": "panda_qpyudLY8bF8rFt69yK-fbLU5wQSO1nHK9H4GixjYNTY"},
+            {"name": "APIHub", "url": "https://apihub-v3-9d48fbce0605.herokuapp.com", "key": "lily_mOVOd9TG7zuE4L9QDxEndbiyjQc9he"},
+            {"name": "PublicAPI", "url": "https://publicapi-v3-d949abed7191.herokuapp.com", "key": "lily_mOVOd9TG7zuE4L9QDxEndbiyjQc9he"},
+            {"name": "APIKey", "url": "https://apikey-v3-1854882f97a1.herokuapp.com", "key": "lily_mOVOd9TG7zuE4L9QDxEndbiyjQc9he"},
         ]
+        for item in api_pool:
+            c_url = item["url"].rstrip("/")
+            if c_url not in seen:
+                candidates.append({"url": c_url, "key": item["key"], "name": item["name"]})
+                seen.add(c_url)
+
+        fallback_apis = candidates
 
         out_file = f"downloads/{video_id}.mp3"
         for api_info in fallback_apis:

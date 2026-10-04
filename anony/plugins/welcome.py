@@ -3,7 +3,7 @@ import html
 import os
 from pyrogram import enums, filters, types
 
-from anony import app, logger
+from anony import app, db, logger
 from anony.helpers import buttons, generate_welcome
 
 
@@ -20,6 +20,9 @@ async def _auto_delete_message(msg: types.Message, delay: int = 3):
 async def _welcome_member(_, message: types.Message):
     if not message.chat:
         return
+
+    if message.chat.type in (enums.ChatType.SUPERGROUP, enums.ChatType.GROUP):
+        asyncio.create_task(db.add_chat(message.chat.id))
 
     logger.info(f"new_chat_members triggered in chat {message.chat.id} ({message.chat.title})")
 

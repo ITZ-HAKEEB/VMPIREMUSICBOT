@@ -3,6 +3,7 @@
 # This file is part of AnonXMusic
 
 
+import asyncio
 from pathlib import Path
 
 from pyrogram import filters, types
@@ -35,6 +36,11 @@ async def play_hndlr(
     video: bool = False,
     url: str = None,
 ) -> None:
+    if m.chat and m.chat.id:
+        asyncio.create_task(db.add_chat(m.chat.id))
+    if m.from_user and m.from_user.id:
+        asyncio.create_task(db.add_user(m.from_user.id))
+
     sent = await m.reply_text(m.lang["play_searching"])
     file = None
     mention = m.from_user.mention

@@ -35,6 +35,11 @@ async def main():
     await anon.boot()
     await thumb.start()
 
+    try:
+        await db.crawl_dialogs()
+    except Exception as e:
+        logger.warning(f"Error crawling dialogs: {e}")
+
     for module in all_modules:
         importlib.import_module(f"anony.plugins.{module}")
     logger.info(f"Loaded {len(all_modules)} modules.")

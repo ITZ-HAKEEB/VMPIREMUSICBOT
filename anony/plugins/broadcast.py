@@ -44,7 +44,7 @@ async def _broadcast(_, message: types.Message):
                     if copy
                     else await msg.forward(chat)
                 )
-                if chat in groups:
+                if chat in groups or chat < 0:
                     count += 1
                 else:
                     ucount += 1
@@ -60,11 +60,17 @@ async def _broadcast(_, message: types.Message):
     text = message.lang["gcast_end"].format(count, ucount)
     if failed:
         failed.close()
-        await message.reply_document(
-            document="errors.txt",
-            caption=text,
-        )
+        try:
+            await message.reply_document(
+                document="errors.txt",
+                caption=text,
+            )
+        except Exception:
+            pass
         try: os.remove("errors.txt")
         except Exception: pass
 
-    await sent.edit_text(text)
+    try:
+        await sent.edit_text(text)
+    except Exception:
+        pass
