@@ -589,6 +589,7 @@ class YouTube:
             {"name": "APIHub", "url": "https://apihub-v3-9d48fbce0605.herokuapp.com", "key": "lily_mOVOd9TG7zuE4L9QDxEndbiyjQc9he"},
             {"name": "PublicAPI", "url": "https://publicapi-v3-d949abed7191.herokuapp.com", "key": "lily_mOVOd9TG7zuE4L9QDxEndbiyjQc9he"},
             {"name": "APIKey", "url": "https://apikey-v3-1854882f97a1.herokuapp.com", "key": "lily_mOVOd9TG7zuE4L9QDxEndbiyjQc9he"},
+            {"name": "FastAPI", "url": "https://fast-api-v3-b7014eeb7106.herokuapp.com", "key": "fastapi_2PifF1fuHEYA11VVpxT0keDnf-MhovkIaCbiDqXrUK0"},
         ]
         for item in api_pool:
             c_url = item["url"].rstrip("/")
