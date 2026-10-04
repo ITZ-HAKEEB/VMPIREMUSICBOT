@@ -59,7 +59,9 @@ class Config:
         )
         self.START_IMG = getenv(
             "START_IMG",
-            "https://i.ibb.co/b5sr0CLv/Chat-GPT-Image-Oct-2-2026-at-09-36-30-AM.png",
+            "assets/start.png"
+            if os.path.exists("assets/start.png")
+            else "https://i.ibb.co/Pzt8wWb1/Chat-GPT-Image-Oct-4-2026-at-09-12-14-AM.png",
         )
 
     def check(self):
