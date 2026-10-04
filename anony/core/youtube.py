@@ -465,25 +465,186 @@ class YouTube:
         self, video_id: str, video: bool = False, title: str = "", duration: int = 0
     ) -> str | None:
         from anony.core.storage import storage_engine
+        from anony import config
 
         target_path = f"downloads/{video_id}.mp4" if video else f"downloads/{video_id}.mp3"
 
-        # 1. Local disk cache hit
+        # =========================================================================
+        # PROCESS 1: Old song direct from local disk or 1TB VPS storage
+        # =========================================================================
+        # 1a. Local disk cache hit
         for cand_ext in (["mp4"] if video else ["mp3", "webm", "m4a", "opus", "mp4"]):
             cand_p = f"downloads/{video_id}.{cand_ext}"
             if Path(cand_p).exists() and Path(cand_p).stat().st_size > 1024:
+                logger.info(f"[PROCESS 1: LOCAL DISK] Instant hit: {video_id} -> {cand_p}")
                 return cand_p
 
-        # 2. 1TB VPS Music Storage Engine (downloads in ~0.8s for flawless local playback)
+        # 1b. 1TB VPS Music Storage Engine (instant restore from VPS NVMe storage)
         if await storage_engine.download_from_vps(video_id, target_path, is_video=video):
+            logger.info(f"[PROCESS 1: VPS STORAGE] Restored old song: {video_id} -> {target_path}")
             return target_path
 
-        # 3. Telegram Dump Supergroup (-1003913556820)
-        dump_target = target_path
-        if await storage_engine.restore_from_telegram_dump(video_id, dump_target, is_video=video):
-            return dump_target
+        # 1c. Telegram Dump Supergroup (-1003913556820)
+        if await storage_engine.restore_from_telegram_dump(video_id, target_path, is_video=video):
+            logger.info(f"[PROCESS 1: TG DUMP] Restored old song: {video_id} -> {target_path}")
+            return target_path
 
-        # 4. Cold live download via yt-dlp
+        # =========================================================================
+        # PROCESS 2: New song -> Live download by Dedicated API
+        # =========================================================================
+        primary_url = getattr(config, "YT_API_URL", None)
+        primary_key = getattr(config, "YT_API_KEY", None)
+
+        if not video and primary_url and primary_key:
+            res = await self._live_download_api(video_id, primary_url, primary_key)
+            if res and Path(res).exists() and Path(res).stat().st_size > 1024:
+                self._persist_song(res, video_id, title, duration, video)
+                return res
+
+            # =====================================================================
+            # PROCESS 3: New song -> Download complete by Dedicated API (after live fail)
+            # =====================================================================
+            res = await self._complete_download_api(video_id, primary_url, primary_key)
+            if res and Path(res).exists() and Path(res).stat().st_size > 1024:
+                self._persist_song(res, video_id, title, duration, video)
+                return res
+
+        # =========================================================================
+        # PROCESS 4: Failover API Pool & Local yt-dlp Extractor
+        # =========================================================================
+        if not video:
+            res = await self._download_via_fallback_api_pool(video_id)
+            if res and Path(res).exists() and Path(res).stat().st_size > 1024:
+                self._persist_song(res, video_id, title, duration, video)
+                return res
+
+        # Local yt-dlp extractor fallback
+        res = await self._download_via_ytdlp(video_id, video=video)
+        if res and Path(res).exists() and Path(res).stat().st_size > 1024:
+            self._persist_song(res, video_id, title, duration, video)
+            return res
+
+        return None
+
+    def _persist_song(self, file_path: str, video_id: str, title: str = "", duration: int = 0, is_video: bool = False):
+        from anony.core.storage import storage_engine
+        t_title = title or self.tracks_cache.get(video_id, {}).get("title", "")
+        t_dur = duration or self.tracks_cache.get(video_id, {}).get("duration_sec", 0)
+        storage_engine.persist_background(
+            file_path=file_path,
+            video_id=video_id,
+            title=t_title,
+            duration=t_dur,
+            is_video=is_video,
+        )
+        if video_id in self.tracks_cache:
+            try:
+                sidecar = Path(f"downloads/{video_id}.meta.json")
+                if not sidecar.exists():
+                    with open(sidecar, "w", encoding="utf-8") as f:
+                        json.dump(self.tracks_cache[video_id], f, ensure_ascii=False)
+            except Exception:
+                pass
+
+    async def _live_download_api(self, video_id: str, base_url: str, api_key: str) -> str | None:
+        """Process 2: Live download stream from dedicated API."""
+        base_url = base_url.rstrip("/")
+        out_file = f"downloads/{video_id}.mp3"
+        req_url = f"{base_url}/audio?id={video_id}"
+        headers = {"x-api-key": api_key, "User-Agent": "Chips-Music/3.0"}
+        try:
+            timeout = aiohttp.ClientTimeout(total=20)
+            async with aiohttp.ClientSession() as session:
+                async with session.get(req_url, headers=headers, timeout=timeout) as resp:
+                    if resp.status != 200:
+                        return None
+                    data = await resp.json()
+                    stream_url = None
+                    audio = data.get("audio") or data.get("data") or data
+                    if isinstance(audio, dict):
+                        streams = audio.get("audio_streams", [])
+                        if streams and isinstance(streams, list):
+                            stream_url = streams[0].get("url")
+                        if not stream_url:
+                            best = audio.get("best_audio", {})
+                            stream_url = best.get("url") or audio.get("url") or audio.get("stream_url")
+                    elif "url" in data:
+                        stream_url = data["url"]
+
+                    if not stream_url:
+                        return None
+
+                    dl_timeout = aiohttp.ClientTimeout(connect=10, sock_read=60, total=300)
+                    async with session.get(
+                        stream_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=dl_timeout
+                    ) as dl_resp:
+                        if dl_resp.status in (200, 206):
+                            Path("downloads").mkdir(parents=True, exist_ok=True)
+                            with open(out_file, "wb") as f:
+                                async for chunk in dl_resp.content.iter_chunked(256 * 1024):
+                                    f.write(chunk)
+                            if Path(out_file).exists() and Path(out_file).stat().st_size > 1024:
+                                logger.info(
+                                    f"[PROCESS 2: LIVE DOWNLOAD] Restored {video_id} via dedicated API {base_url} -> {out_file} ({Path(out_file).stat().st_size} bytes)"
+                                )
+                                return out_file
+        except Exception as e:
+            logger.warning(f"[PROCESS 2 FAIL] Live download via dedicated API {base_url} failed for {video_id}: {e}")
+        return None
+
+    async def _complete_download_api(self, video_id: str, base_url: str, api_key: str) -> str | None:
+        """Process 3: Complete download (100% cached audio file) from dedicated API."""
+        base_url = base_url.rstrip("/")
+        out_file = f"downloads/{video_id}.mp3"
+        complete_url = f"{base_url}/download/complete?id={video_id}"
+        headers = {"x-api-key": api_key, "User-Agent": "Chips-Music/3.0"}
+        try:
+            dl_timeout = aiohttp.ClientTimeout(connect=10, sock_read=60, total=300)
+            async with aiohttp.ClientSession() as session:
+                async with session.get(complete_url, headers=headers, timeout=dl_timeout) as dl_resp:
+                    if dl_resp.status == 200:
+                        Path("downloads").mkdir(parents=True, exist_ok=True)
+                        with open(out_file, "wb") as f:
+                            async for chunk in dl_resp.content.iter_chunked(256 * 1024):
+                                f.write(chunk)
+                        if Path(out_file).exists() and Path(out_file).stat().st_size > 1024:
+                            logger.info(
+                                f"[PROCESS 3: COMPLETE DOWNLOAD] Restored {video_id} via dedicated API {base_url} -> {out_file} ({Path(out_file).stat().st_size} bytes)"
+                            )
+                            return out_file
+        except Exception as e:
+            logger.warning(f"[PROCESS 3 FAIL] Complete download via dedicated API {base_url} failed for {video_id}: {e}")
+        return None
+
+    async def _download_via_fallback_api_pool(self, video_id: str) -> str | None:
+        """Process 4a: Failover API pool (trying other active fleet APIs)."""
+        from anony import config
+        primary_url = (getattr(config, "YT_API_URL", None) or "").rstrip("/")
+        api_pool = [
+            {"name": "Noah", "url": "https://noah-api-v3-12d3419875af.herokuapp.com", "key": "Noah-LrTinhpR67h7C_HoCGykI9wHARDRJPJVz3TwBSq6wd4"},
+            {"name": "Titanic", "url": "https://titanic-api-v3-01462a8481af.herokuapp.com", "key": "titanic_lhQkzaBhIQTwpquq_XBIfBI52wtN49fhdTOBBBkfLNo"},
+            {"name": "Panda", "url": "https://panda-api-v3-6e9434966ef9.herokuapp.com", "key": "panda_qpyudLY8bF8rFt69yK-fbLU5wQSO1nHK9H4GixjYNTY"},
+            {"name": "APIHub", "url": "https://apihub-v3-9d48fbce0605.herokuapp.com", "key": "lily_mOVOd9TG7zuE4L9QDxEndbiyjQc9he"},
+            {"name": "PublicAPI", "url": "https://publicapi-v3-d949abed7191.herokuapp.com", "key": "lily_mOVOd9TG7zuE4L9QDxEndbiyjQc9he"},
+            {"name": "APIKey", "url": "https://apikey-v3-1854882f97a1.herokuapp.com", "key": "lily_mOVOd9TG7zuE4L9QDxEndbiyjQc9he"},
+            {"name": "FastAPI", "url": "https://fast-api-v3-b7014eeb7106.herokuapp.com", "key": "fastapi_2PifF1fuHEYA11VVpxT0keDnf-MhovkIaCbiDqXrUK0"},
+        ]
+        for item in api_pool:
+            c_url = item["url"].rstrip("/")
+            if c_url == primary_url:
+                continue
+            # Try complete download first on backup
+            res = await self._complete_download_api(video_id, c_url, item["key"])
+            if res:
+                return res
+            # Try live download fallback on backup
+            res = await self._live_download_api(video_id, c_url, item["key"])
+            if res:
+                return res
+        return None
+
+    async def _download_via_ytdlp(self, video_id: str, video: bool = False) -> str | None:
+        """Process 4b: Local yt-dlp extractor fallback."""
         url = self.base + video_id
         cookie = self.get_cookies()
         base_opts = {
@@ -521,154 +682,21 @@ class YouTube:
                 "format": "bestaudio/best",
             }
 
-        def _download():
+        def _exec():
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 try:
                     ydl.download([url])
                     for candidate_ext in ["webm", "mp4", "m4a", "opus", "mp3"]:
                         candidate_path = f"downloads/{video_id}.{candidate_ext}"
                         if Path(candidate_path).exists() and Path(candidate_path).stat().st_size > 1024:
-                            logger.info(f"[LIVE YT DOWNLOAD] Done: {video_id} -> {candidate_path}")
+                            logger.info(f"[PROCESS 4: YT-DLP] Downloaded: {video_id} -> {candidate_path}")
                             return candidate_path
-                    return filename if Path(filename).exists() else None
-                except (yt_dlp.utils.DownloadError, yt_dlp.utils.ExtractorError) as e:
-                    logger.warning(f"Download extractor error for {video_id}: {e}")
                     return None
                 except Exception as ex:
-                    logger.warning(f"Download failed for {video_id}: {ex}")
+                    logger.warning(f"Local yt-dlp failed for {video_id}: {ex}")
                     return None
 
-        res = await asyncio.to_thread(_download)
-
-        # 5. High-speed backend API fallback if yt-dlp encounters issues
-        if not res or not Path(res).exists() or Path(res).stat().st_size <= 1024:
-            res = await self._download_via_fallback_api(video_id, is_video=video)
-
-        if res and Path(res).exists() and Path(res).stat().st_size > 1024:
-            t_title = title or self.tracks_cache.get(video_id, {}).get("title", "")
-            t_dur = duration or self.tracks_cache.get(video_id, {}).get("duration_sec", 0)
-            storage_engine.persist_background(
-                file_path=res,
-                video_id=video_id,
-                title=t_title,
-                duration=t_dur,
-                is_video=video,
-            )
-            if video_id in self.tracks_cache:
-                try:
-                    sidecar = Path(f"downloads/{video_id}.meta.json")
-                    if not sidecar.exists():
-                        with open(sidecar, "w", encoding="utf-8") as f:
-                            json.dump(self.tracks_cache[video_id], f, ensure_ascii=False)
-                except Exception:
-                    pass
-        return res
-
-    async def _download_via_fallback_api(self, video_id: str, is_video: bool = False) -> str | None:
-        """Download track via high-speed Titanic / Noah backend APIs if yt-dlp encounters issues."""
-        if is_video:
-            return None
-
-        from anony import config
-        candidates = []
-        seen = set()
-
-        # 1. Primary assigned API for this specific bot from env
-        primary_url = getattr(config, "YT_API_URL", None)
-        primary_key = getattr(config, "YT_API_KEY", None)
-        if primary_url and primary_key:
-            clean = primary_url.rstrip("/")
-            candidates.append({"url": clean, "key": primary_key, "name": "Assigned-Primary"})
-            seen.add(clean)
-
-        # 2. Ranked active fleet API pool (fail-safe backups)
-        api_pool = [
-            {"name": "Noah", "url": "https://noah-api-v3-12d3419875af.herokuapp.com", "key": "Noah-LrTinhpR67h7C_HoCGykI9wHARDRJPJVz3TwBSq6wd4"},
-            {"name": "Titanic", "url": "https://titanic-api-v3-01462a8481af.herokuapp.com", "key": "titanic_lhQkzaBhIQTwpquq_XBIfBI52wtN49fhdTOBBBkfLNo"},
-            {"name": "Panda", "url": "https://panda-api-v3-6e9434966ef9.herokuapp.com", "key": "panda_qpyudLY8bF8rFt69yK-fbLU5wQSO1nHK9H4GixjYNTY"},
-            {"name": "APIHub", "url": "https://apihub-v3-9d48fbce0605.herokuapp.com", "key": "lily_mOVOd9TG7zuE4L9QDxEndbiyjQc9he"},
-            {"name": "PublicAPI", "url": "https://publicapi-v3-d949abed7191.herokuapp.com", "key": "lily_mOVOd9TG7zuE4L9QDxEndbiyjQc9he"},
-            {"name": "APIKey", "url": "https://apikey-v3-1854882f97a1.herokuapp.com", "key": "lily_mOVOd9TG7zuE4L9QDxEndbiyjQc9he"},
-            {"name": "FastAPI", "url": "https://fast-api-v3-b7014eeb7106.herokuapp.com", "key": "fastapi_2PifF1fuHEYA11VVpxT0keDnf-MhovkIaCbiDqXrUK0"},
-        ]
-        for item in api_pool:
-            c_url = item["url"].rstrip("/")
-            if c_url not in seen:
-                candidates.append({"url": c_url, "key": item["key"], "name": item["name"]})
-                seen.add(c_url)
-
-        fallback_apis = candidates
-
-        out_file = f"downloads/{video_id}.mp3"
-        for api_info in fallback_apis:
-            base_url = (api_info.get("url") or "").rstrip("/")
-            api_key = api_info.get("key") or ""
-            if not base_url or not api_key:
-                continue
-
-            headers = {"x-api-key": api_key, "User-Agent": "Chips-Music/3.0"}
-
-            # Strategy A: Direct Complete Download endpoint (100% full song, cached on API)
-            complete_url = f"{base_url}/download/complete?id={video_id}"
-            try:
-                dl_timeout = aiohttp.ClientTimeout(connect=10, sock_read=60, total=300)
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(complete_url, headers=headers, timeout=dl_timeout) as dl_resp:
-                        if dl_resp.status == 200:
-                            Path("downloads").mkdir(parents=True, exist_ok=True)
-                            with open(out_file, "wb") as f:
-                                async for chunk in dl_resp.content.iter_chunked(256 * 1024):
-                                    f.write(chunk)
-                            if Path(out_file).exists() and Path(out_file).stat().st_size > 1024:
-                                logger.info(
-                                    f"[API COMPLETE DOWNLOAD] Restored {video_id} via {base_url} -> {out_file} ({Path(out_file).stat().st_size} bytes)"
-                                )
-                                return out_file
-            except Exception as e:
-                logger.warning(f"Complete download endpoint ({base_url}) error for {video_id}: {e}")
-
-            # Strategy B: /audio stream resolution fallback
-            req_url = f"{base_url}/audio?id={video_id}"
-            try:
-                timeout = aiohttp.ClientTimeout(total=20)
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(req_url, headers=headers, timeout=timeout) as resp:
-                        if resp.status != 200:
-                            continue
-                        data = await resp.json()
-                        stream_url = None
-                        audio = data.get("audio") or data.get("data") or data
-                        if isinstance(audio, dict):
-                            streams = audio.get("audio_streams", [])
-                            if streams and isinstance(streams, list):
-                                stream_url = streams[0].get("url")
-                            if not stream_url:
-                                best = audio.get("best_audio", {})
-                                stream_url = best.get("url") or audio.get("url") or audio.get("stream_url")
-                        elif "url" in data:
-                            stream_url = data["url"]
-
-                        if not stream_url:
-                            continue
-
-                        dl_timeout = aiohttp.ClientTimeout(connect=10, sock_read=60, total=300)
-                        async with session.get(
-                            stream_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=dl_timeout
-                        ) as dl_resp:
-                            if dl_resp.status in (200, 206):
-                                Path("downloads").mkdir(parents=True, exist_ok=True)
-                                with open(out_file, "wb") as f:
-                                    async for chunk in dl_resp.content.iter_chunked(256 * 1024):
-                                        f.write(chunk)
-                                if Path(out_file).exists() and Path(out_file).stat().st_size > 1024:
-                                    logger.info(
-                                        f"[API FALLBACK DOWNLOAD] Restored {video_id} via {base_url} -> {out_file}"
-                                    )
-                                    return out_file
-            except Exception as e:
-                logger.warning(f"Fallback API ({base_url}) error for {video_id}: {e}")
-                continue
-        return None
+        return await asyncio.to_thread(_exec)
 
     async def get_stream_url(self, video_id: str, video: bool = False) -> str | None:
         # Return local disk cache if present
