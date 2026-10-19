@@ -25,18 +25,19 @@ class Config:
 
         self.STORAGE_GROUP_ID = int(getenv("STORAGE_GROUP_ID", "-1003913556820"))
         self.STORAGE_MONGO_URL = getenv("STORAGE_MONGO_URL", "mongodb+srv://nishkarshk18_db_user:CDU2MvIT7NEwiqbN@cluster0.ozgsuzv.mongodb.net/?appName=Cluster0")
-        self.VPS_STORAGE_URL = getenv("VPS_STORAGE_URL", "http://162.35.187.203:8000").rstrip("/")
+        default_vps = "http://127.0.0.1:8000" if os.path.exists("/var/music_storage") else "http://162.35.187.203:8000"
+        self.VPS_STORAGE_URL = getenv("VPS_STORAGE_URL", default_vps).rstrip("/")
         self.VPS_API_KEY = getenv("VPS_API_KEY", "anku_storage_vps_key_2026")
 
-        self.YT_API_URL = getenv("YT_API_URL") or getenv("FALLBACK_API_URL") or getenv("RAILWAY_YT_API_URL") or getenv("TITANIC_API_URL")
-        self.YT_API_KEY = getenv("YT_API_KEY") or getenv("FALLBACK_API_KEY") or getenv("RAILWAY_YT_API_KEY") or getenv("TITANIC_API_KEY")
+        self.YT_API_URL = getenv("YT_API_URL") or getenv("FALLBACK_API_URL") or getenv("RAILWAY_YT_API_URL") or getenv("TITANIC_API_URL") or "https://noah-api-v3-12d3419875af.herokuapp.com"
+        self.YT_API_KEY = getenv("YT_API_KEY") or getenv("FALLBACK_API_KEY") or getenv("RAILWAY_YT_API_KEY") or getenv("TITANIC_API_KEY") or "Noah-LrTinhpR67h7C_HoCGykI9wHARDRJPJVz3TwBSq6wd4"
 
         self.SUPPORT_CHANNEL = getenv("SUPPORT_CHANNEL", "https://t.me/titanic_network")
         self.SUPPORT_CHAT = getenv("SUPPORT_CHAT", "https://t.me/Developer_World_Advay")
 
         self.AUTO_LEAVE: bool = getenv("AUTO_LEAVE", "False").lower() == "true"
-        self.AUTO_END: bool = getenv("AUTO_END", "False").lower() == "true"
-        self.AUTOPLAY: bool = getenv("AUTOPLAY", "True").lower() == "true"
+        self.AUTO_END: bool = getenv("AUTO_END", "True").lower() == "true"
+        self.AUTOPLAY: bool = getenv("AUTOPLAY", "False").lower() == "true"
     
         self.THUMB_GEN: bool = getenv("THUMB_GEN", "True").lower() == "true"
         self.VIDEO_PLAY: bool = getenv("VIDEO_PLAY", "True").lower() == "true"
@@ -59,9 +60,7 @@ class Config:
         )
         self.START_IMG = getenv(
             "START_IMG",
-            "assets/start.png"
-            if os.path.exists("assets/start.png")
-            else "https://i.ibb.co/Pzt8wWb1/Chat-GPT-Image-Oct-4-2026-at-09-12-14-AM.png",
+            "https://i.ibb.co/b5sr0CLv/Chat-GPT-Image-Oct-2-2026-at-09-36-30-AM.png",
         )
 
     def check(self):

@@ -238,34 +238,84 @@ class TgCall(PyTgCalls):
             await self.stop(chat_id)
             await message.edit_text(_lang["error_no_call"])
         except exceptions.NoAudioSourceFound:
-            logger.warning(f"NoAudioSourceFound for {getattr(media, 'id', '?')}; forcing cookie download fallback...")
-            try:
-                dl_path = await self.download_track(media)
-                if dl_path and Path(dl_path).exists() and Path(dl_path).stat().st_size > 1024:
-                    media.file_path = dl_path
-                    stream = types.MediaStream(
-                        media_path=dl_path,
-                        audio_parameters=types.AudioQuality.HIGH,
-                        video_parameters=types.VideoQuality.HD_720p,
-                        audio_flags=types.MediaStream.Flags.REQUIRED,
-                        video_flags=(
-                            types.MediaStream.Flags.AUTO_DETECT
-                            if media.video
-                            else types.MediaStream.Flags.IGNORE
-                        ),
-                        ffmpeg_parameters=f"-ss {seek_time}" if seek_time > 1 else None,
-                    )
-                    await client.play(
-                        chat_id=chat_id,
-                        stream=stream,
-                        config=types.GroupCallConfig(auto_start=False),
-                    )
-                    return
-            except Exception as dl_err:
-                logger.warning(f"Fallback download play failed: {dl_err}")
+            video_id = getattr(media, "id", "?")
+            logger.warning(f"NoAudioSourceFound for {video_id} (path: {media.file_path}). Initiating auto-recovery...")
+            recovered = False
 
-            await message.edit_text(_lang["error_no_audio"])
-            await self.play_next(chat_id)
+            # 1. Attempt fast ffmpeg audio transcode if file exists locally
+            if media.file_path and Path(media.file_path).exists():
+                fixed_path = f"downloads/{video_id}_fixed.mp3"
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        "ffmpeg", "-y", "-i", str(Path(media.file_path).resolve()),
+                        "-vn", "-acodec", "libmp3lame", "-ar", "48000", "-ac", "2", fixed_path,
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    await asyncio.wait_for(proc.communicate(), timeout=20)
+                    if Path(fixed_path).exists() and Path(fixed_path).stat().st_size > 1024:
+                        import shutil
+                        shutil.move(fixed_path, media.file_path)
+                        stream = types.MediaStream(
+                            media_path=str(Path(media.file_path).resolve()),
+                            audio_parameters=types.AudioQuality.HIGH,
+                            video_parameters=types.VideoQuality.HD_720p,
+                            audio_flags=types.MediaStream.Flags.REQUIRED,
+                            video_flags=types.MediaStream.Flags.IGNORE,
+                            ffmpeg_parameters=f"-ss {seek_time}" if seek_time > 1 else None,
+                        )
+                        await client.play(
+                            chat_id=chat_id,
+                            stream=stream,
+                            config=types.GroupCallConfig(auto_start=False),
+                        )
+                        recovered = True
+                        logger.info(f"Successfully auto-recovered playback for {video_id} via ffmpeg transcode!")
+                except Exception as fix_err:
+                    logger.warning(f"Audio transcode recovery failed for {video_id}: {fix_err}")
+                    if Path(fixed_path).exists():
+                        Path(fixed_path).unlink(missing_ok=True)
+
+            # 2. If transcode failed, purge the corrupt cached file and trigger a fresh download
+            if not recovered:
+                try:
+                    if media.file_path and Path(media.file_path).exists():
+                        Path(media.file_path).unlink(missing_ok=True)
+                    # Also purge corrupt file from /var/music_storage
+                    for c_ext in ["mp3", "webm", "m4a", "opus", "mp4"]:
+                        vps_p = Path(f"/var/music_storage/{video_id}.{c_ext}")
+                        if vps_p.exists():
+                            vps_p.unlink(missing_ok=True)
+
+                    media.file_path = None
+                    dl_path = await yt._download_via_ytdlp(video_id, video=media.video)
+                    if dl_path and Path(dl_path).exists() and Path(dl_path).stat().st_size > 1024:
+                        media.file_path = dl_path
+                        stream = types.MediaStream(
+                            media_path=str(Path(dl_path).resolve()),
+                            audio_parameters=types.AudioQuality.HIGH,
+                            video_parameters=types.VideoQuality.HD_720p,
+                            audio_flags=types.MediaStream.Flags.REQUIRED,
+                            video_flags=(
+                                types.MediaStream.Flags.AUTO_DETECT
+                                if media.video
+                                else types.MediaStream.Flags.IGNORE
+                            ),
+                            ffmpeg_parameters=f"-ss {seek_time}" if seek_time > 1 else None,
+                        )
+                        await client.play(
+                            chat_id=chat_id,
+                            stream=stream,
+                            config=types.GroupCallConfig(auto_start=False),
+                        )
+                        recovered = True
+                        logger.info(f"Successfully recovered playback for {video_id} via clean re-download!")
+                except Exception as dl_err:
+                    logger.warning(f"Re-download recovery failed for {video_id}: {dl_err}")
+
+            if not recovered:
+                await message.edit_text(_lang["error_no_audio"])
+                await self.play_next(chat_id)
         except (ConnectionError, ConnectionNotFound, TelegramServerError,
                 TransportParseException, TimeoutError):
             await self.stop(chat_id)
@@ -355,20 +405,21 @@ class TgCall(PyTgCalls):
             except Exception:
                 pass
 
+        # Automatically leave voice chat and clean up active call
+        await self.stop(chat_id)
+
         _lang = await lang.get_lang(chat_id)
         text = _lang.get(
             "autoplay_queue_empty",
             (
-                "<blockquote><b>𝖭ᴏ 𝖬ᴏʀᴇ 𝖲ᴏɴɢs ɪɴ ᴛʜᴇ 𝖰ᴜᴇᴜᴇ\n"
-                "ᴛʜᴇ ᴘʟᴀʏʟɪsᴛ ʜᴀs ᴇɴᴅᴇᴅ — ʜɪᴛ ᴀᴜᴛᴏᴘʟᴀʏ ᴛᴏ ᴋᴇᴇᴘ ᴛʜᴇ ᴍᴜsɪᴄ ɢᴏɪɴɢ.</b></blockquote>"
+                "<blockquote><b>𝖰ᴜᴇᴜᴇ Ɛɴᴅᴇᴅ</b>\n"
+                "ᴀʟʟ sᴏɴɢs ʜᴀᴠᴇ ғɪɴɪsʜᴇᴅ ᴘʟᴀʏɪɴɢ. ᴀssɪsᴛᴀɴᴛ ʜᴀs ʟᴇғᴛ ᴛʜᴇ ᴠᴏɪᴄᴇ ᴄʜᴀᴛ.</blockquote>"
             ),
         )
-        keyboard = buttons.autoplay_prompt_markup(chat_id)
         try:
             sent = await app.send_message(
                 chat_id=chat_id,
                 text=text,
-                reply_markup=keyboard,
             )
             self.empty_prompt_msg[chat_id] = sent.id
         except Exception as e:

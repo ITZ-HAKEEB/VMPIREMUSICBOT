@@ -132,11 +132,7 @@ async def play_hndlr(
             return
 
     if not file.file_path or not Path(file.file_path).exists():
-        for ext_cand in (["mp4"] if video else ["mp3", "webm", "m4a", "opus", "mp4"]):
-            fname = f"downloads/{file.id}.{ext_cand}"
-            if Path(fname).exists() and Path(fname).stat().st_size > 1024:
-                file.file_path = fname
-                break
+        file.file_path = yt.get_local_path(file.id, video=video)
 
         if not file.file_path:
             if m.lang.get("play_downloading") != m.lang.get("play_searching"):

@@ -51,6 +51,17 @@ class YouTube:
             r"|playlist\?list=PL[A-Za-z0-9_-]+|[A-Za-z0-9_-]{11}))\S*"
         )
 
+    @staticmethod
+    def get_local_path(video_id: str, video: bool = False) -> str | None:
+        if not video_id:
+            return None
+        candidates = ["mp4"] if video else ["mp3", "webm", "m4a", "opus", "mp4"]
+        for ext in candidates:
+            p = f"downloads/{video_id}.{ext}"
+            if Path(p).exists() and Path(p).stat().st_size > 1024:
+                return p
+        return None
+
     def _load_cache(self):
         try:
             if os.path.exists(self.meta_cache_file):
@@ -143,15 +154,9 @@ class YouTube:
             return None
 
         # Verify the physical file is present in downloads/
-        ext = "mp4" if video else "webm"
-        fname = f"downloads/{video_id}.{ext}"
-        if not (Path(fname).exists() and Path(fname).stat().st_size > 1024):
-            alt_ext = "webm" if video else "mp4"
-            alt_fname = f"downloads/{video_id}.{alt_ext}"
-            if Path(alt_fname).exists() and Path(alt_fname).stat().st_size > 1024:
-                fname = alt_fname
-            else:
-                return None
+        fname = self.get_local_path(video_id, video)
+        if not fname:
+            return None
 
         meta = self.tracks_cache[video_id]
         track = Track(
@@ -254,9 +259,7 @@ class YouTube:
         if results and results["result"]:
             data = results["result"][0]
             track_id = data.get("id")
-            ext = "mp4" if video else "webm"
-            fname = f"downloads/{track_id}.{ext}"
-            file_path = fname if Path(fname).exists() and Path(fname).stat().st_size > 1024 else None
+            file_path = self.get_local_path(track_id, video)
 
             track = Track(
                 id=track_id,
@@ -282,9 +285,7 @@ class YouTube:
             plist = await Playlist.get(url)
             for data in plist["videos"][:limit]:
                 track_id = data.get("id")
-                ext = "mp4" if video else "webm"
-                fname = f"downloads/{track_id}.{ext}"
-                file_path = fname if Path(fname).exists() and Path(fname).stat().st_size > 1024 else None
+                file_path = self.get_local_path(track_id, video)
                 track = Track(
                     id=track_id,
                     channel_name=data.get("channel", {}).get("name", ""),
@@ -393,13 +394,7 @@ class YouTube:
                                         dur_sec = 0
                                     if dur_sec < 10:
                                         continue
-                                    ext = "mp4" if video else "webm"
-                                    fname = f"downloads/{cid}.{ext}"
-                                    file_path = (
-                                        fname
-                                        if Path(fname).exists() and Path(fname).stat().st_size > 1024
-                                        else None
-                                    )
+                                    file_path = self.get_local_path(cid, video)
                                     trk = Track(
                                         id=cid,
                                         channel_name=channel,
@@ -435,12 +430,7 @@ class YouTube:
                         except Exception:
                             dur_sec = 0
                         ext = "mp4" if video else "webm"
-                        fname = f"downloads/{cid}.{ext}"
-                        file_path = (
-                            fname
-                            if Path(fname).exists() and Path(fname).stat().st_size > 1024
-                            else None
-                        )
+                        file_path = self.get_local_path(cid, video)
                         trk = Track(
                             id=cid,
                             channel_name=data.get("channel", {}).get("name", ""),
@@ -580,10 +570,12 @@ class YouTube:
                     ) as dl_resp:
                         if dl_resp.status in (200, 206):
                             Path("downloads").mkdir(parents=True, exist_ok=True)
-                            with open(out_file, "wb") as f:
+                            tmp_out = f"{out_file}.tmp"
+                            with open(tmp_out, "wb") as f:
                                 async for chunk in dl_resp.content.iter_chunked(256 * 1024):
                                     f.write(chunk)
-                            if Path(out_file).exists() and Path(out_file).stat().st_size > 1024:
+                            if Path(tmp_out).exists() and Path(tmp_out).stat().st_size > 1024:
+                                os.replace(tmp_out, out_file)
                                 logger.info(
                                     f"[PROCESS 2: LIVE DOWNLOAD] Restored {video_id} via dedicated API {base_url} -> {out_file} ({Path(out_file).stat().st_size} bytes)"
                                 )
@@ -604,10 +596,12 @@ class YouTube:
                 async with session.get(complete_url, headers=headers, timeout=dl_timeout) as dl_resp:
                     if dl_resp.status == 200:
                         Path("downloads").mkdir(parents=True, exist_ok=True)
-                        with open(out_file, "wb") as f:
+                        tmp_out = f"{out_file}.tmp"
+                        with open(tmp_out, "wb") as f:
                             async for chunk in dl_resp.content.iter_chunked(256 * 1024):
                                 f.write(chunk)
-                        if Path(out_file).exists() and Path(out_file).stat().st_size > 1024:
+                        if Path(tmp_out).exists() and Path(tmp_out).stat().st_size > 1024:
+                            os.replace(tmp_out, out_file)
                             logger.info(
                                 f"[PROCESS 3: COMPLETE DOWNLOAD] Restored {video_id} via dedicated API {base_url} -> {out_file} ({Path(out_file).stat().st_size} bytes)"
                             )
@@ -699,16 +693,6 @@ class YouTube:
         return await asyncio.to_thread(_exec)
 
     async def get_stream_url(self, video_id: str, video: bool = False) -> str | None:
-        # Return local disk cache if present
-        for cand_ext in (["mp4"] if video else ["mp3", "webm", "m4a", "opus", "mp4"]):
-            cand_p = f"downloads/{video_id}.{cand_ext}"
-            if Path(cand_p).exists() and Path(cand_p).stat().st_size > 1024:
-                return cand_p
-
-        # Do not return remote HTTP URLs for live playback because remote HTTP streams
-        # suffer from network jitter/h11 Range timeouts and cause voice chat to stop playing early!
-        # Returning None forces download_track() to fetch the file completely (~0.8s from VPS)
-        # so PyTgCalls plays 100% of the song without interruptions from start to finish!
-        return None
+        return self.get_local_path(video_id, video)
 
 

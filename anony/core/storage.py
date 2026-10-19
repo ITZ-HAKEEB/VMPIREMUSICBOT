@@ -42,24 +42,68 @@ class StorageEngine:
             pass
         return None
 
+    @staticmethod
+    def is_valid_media(file_path: str, is_video: bool = False) -> bool:
+        if not file_path or not Path(file_path).exists() or Path(file_path).stat().st_size <= 1024:
+            return False
+        try:
+            import subprocess
+            res = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(file_path)],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            target = "video" if is_video else "audio"
+            return target in res.stdout
+        except Exception:
+            return True
+
     async def download_from_vps(self, video_id: str, dest_path: str, is_video: bool = False) -> bool:
         """Download song from 1TB VPS Storage into local downloads folder."""
+        # Fast local NVMe disk check if running directly on the VPS host
+        local_vps_dir = Path("/var/music_storage")
+        if local_vps_dir.exists():
+            cand_ext = "mp4" if is_video else "mp3"
+            for ext in ([cand_ext] if is_video else ["mp3", "webm", "m4a", "opus"]):
+                src = local_vps_dir / f"{video_id}.{ext}"
+                if src.exists() and src.stat().st_size > 1024:
+                    if not self.is_valid_media(str(src), is_video):
+                        logger.warning(f"[VPS DISK PURGE] Purging corrupt NVMe file with no audio: {src}")
+                        try:
+                            src.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                        continue
+                    Path(dest_path).parent.mkdir(parents=True, exist_ok=True)
+                    import shutil
+                    shutil.copy2(src, dest_path)
+                    logger.info(f"[VPS DISK HIT] Instant NVMe restore: {video_id} -> {dest_path}")
+                    return True
+
         if not self.vps_url:
             return False
         ep = "play/video" if is_video else "play/audio"
         url = f"{self.vps_url}/{ep}?id={video_id}"
         try:
             session = await self._get_session()
-            timeout = aiohttp.ClientTimeout(connect=4, total=30)
+            timeout = aiohttp.ClientTimeout(connect=2, total=8)
             async with session.get(url, timeout=timeout) as resp:
                 if resp.status == 200:
+                    tmp_dest = f"{dest_path}.tmp"
                     Path(dest_path).parent.mkdir(parents=True, exist_ok=True)
-                    with open(dest_path, "wb") as f:
+                    with open(tmp_dest, "wb") as f:
                         async for chunk in resp.content.iter_chunked(256 * 1024):
                             f.write(chunk)
-                    if Path(dest_path).exists() and Path(dest_path).stat().st_size > 1024:
-                        logger.info(f"[VPS DOWNLOAD] Restored {video_id} to {dest_path}")
-                        return True
+                    if Path(tmp_dest).exists() and Path(tmp_dest).stat().st_size > 1024:
+                        if self.is_valid_media(tmp_dest, is_video):
+                            import os
+                            os.replace(tmp_dest, dest_path)
+                            logger.info(f"[VPS DOWNLOAD] Restored {video_id} to {dest_path}")
+                            return True
+                        else:
+                            Path(tmp_dest).unlink(missing_ok=True)
+                            logger.warning(f"[VPS DOWNLOAD CORRUPT] Discarded corrupt VPS download for {video_id}")
                 else:
                     logger.debug(f"VPS does not have {video_id} yet (status {resp.status})")
         except Exception as e:
@@ -85,6 +129,10 @@ class StorageEngine:
                     if msg and (msg.audio or msg.video or msg.document):
                         path = await app.download_media(msg, file_name=dest_path)
                         if path and Path(path).exists() and Path(path).stat().st_size > 1024:
+                            if not self.is_valid_media(path, is_video):
+                                logger.warning(f"[TG DUMP PURGE] Discarding corrupt TG dump file {path}")
+                                Path(path).unlink(missing_ok=True)
+                                return False
                             logger.info(f"[TG DUMP HIT] Restored {video_id} via Bot message {msg_id}")
                             return True
                 except Exception as e:
@@ -95,6 +143,10 @@ class StorageEngine:
                 try:
                     path = await app.download_media(file_id, file_name=dest_path)
                     if path and Path(path).exists() and Path(path).stat().st_size > 1024:
+                        if not self.is_valid_media(path, is_video):
+                            logger.warning(f"[TG DUMP PURGE] Discarding corrupt TG dump file {path}")
+                            Path(path).unlink(missing_ok=True)
+                            return False
                         logger.info(f"[TG DUMP HIT] Restored {video_id} via Bot file_id")
                         return True
                 except Exception as e:
@@ -108,6 +160,10 @@ class StorageEngine:
                     if msg and (msg.audio or msg.video or msg.document):
                         path = await ub.download_media(msg, file_name=dest_path)
                         if path and Path(path).exists() and Path(path).stat().st_size > 1024:
+                            if not self.is_valid_media(path, is_video):
+                                logger.warning(f"[TG DUMP PURGE] Discarding corrupt TG dump file {path}")
+                                Path(path).unlink(missing_ok=True)
+                                return False
                             logger.info(f"[TG DUMP HIT] Restored {video_id} via Assistant message {msg_id}")
                             return True
                 except Exception as e:
@@ -119,6 +175,10 @@ class StorageEngine:
                     ub = userbot.clients[0]
                     path = await ub.download_media(file_id, file_name=dest_path)
                     if path and Path(path).exists() and Path(path).stat().st_size > 1024:
+                        if not self.is_valid_media(path, is_video):
+                            logger.warning(f"[TG DUMP PURGE] Discarding corrupt TG dump file {path}")
+                            Path(path).unlink(missing_ok=True)
+                            return False
                         logger.info(f"[TG DUMP HIT] Restored {video_id} via Assistant file_id")
                         return True
                 except Exception as e:
@@ -180,9 +240,23 @@ class StorageEngine:
         except Exception as e:
             logger.warning(f"Failed to upload {video_id} to Telegram Dump: {e}")
 
-    async def upload_to_vps_storage(self, file_path: str, video_id: str) -> None:
+    async def upload_to_vps_storage(self, file_path: str, video_id: str, is_video: bool = False) -> None:
         """Upload newly downloaded song to 1TB VPS Storage."""
-        if not self.vps_url or not Path(file_path).exists() or Path(file_path).stat().st_size < 10000:
+        if not Path(file_path).exists() or Path(file_path).stat().st_size < 10000:
+            return
+
+        # Fast local NVMe disk sync if running directly on the VPS host
+        local_vps_dir = Path("/var/music_storage")
+        if local_vps_dir.exists():
+            cand_ext = "mp4" if is_video else "mp3"
+            dst = local_vps_dir / f"{video_id}.{cand_ext}"
+            if not dst.exists() or dst.stat().st_size <= 1024:
+                import shutil
+                shutil.copy2(file_path, dst)
+                logger.info(f"[VPS LOCAL SYNC] Saved {video_id} directly to /var/music_storage")
+                return
+
+        if not self.vps_url:
             return
         try:
             session = await self._get_session()
@@ -210,7 +284,7 @@ class StorageEngine:
         """Non-blocking background sync to both Telegram Dump and 1TB VPS."""
         async def _sync():
             await self.upload_to_telegram_dump(file_path, video_id, title, duration, is_video)
-            await self.upload_to_vps_storage(file_path, video_id)
+            await self.upload_to_vps_storage(file_path, video_id, is_video=is_video)
 
         asyncio.create_task(_sync())
 
