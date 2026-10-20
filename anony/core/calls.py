@@ -611,7 +611,7 @@ class TgCall(PyTgCalls):
                 pass
 
             if chat and getattr(chat, "username", None):
-                vc_url = f"https://t.me/{chat.username}?videochat"
+                vc_url = f"tg://resolve?domain={chat.username}&videochat"
             else:
                 c_id = str(chat_id).replace("-100", "").replace("-", "")
                 vc_url = f"https://t.me/c/{c_id}?videochat"

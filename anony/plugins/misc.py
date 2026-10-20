@@ -51,7 +51,7 @@ async def _vc_started(_, m: types.Message):
         )
 
         if m.chat.username:
-            vc_url = f"https://t.me/{m.chat.username}?videochat"
+            vc_url = f"tg://resolve?domain={m.chat.username}&videochat"
         else:
             c_id = str(m.chat.id).replace("-100", "").replace("-", "")
             vc_url = f"https://t.me/c/{c_id}?videochat"
