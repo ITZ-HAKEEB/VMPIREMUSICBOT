@@ -595,7 +595,7 @@ class TgCall(PyTgCalls):
             )
             sent_msg = await app.send_message(chat_id=chat_id, text=text, disable_web_page_preview=True)
             if sent_msg:
-                async def _auto_del_vc_msg(msg: types.Message):
+                async def _auto_del_vc_msg(msg):
                     await asyncio.sleep(5)
                     try:
                         await msg.delete()
@@ -603,7 +603,9 @@ class TgCall(PyTgCalls):
                         pass
                 asyncio.create_task(_auto_del_vc_msg(sent_msg))
         except Exception as e:
-            logger.warning(f"Error sending VC join notification in {chat_id}: {e}")
+            err_str = str(e)
+            if "CHANNEL_INVALID" not in err_str and "CHAT_WRITE_FORBIDDEN" not in err_str:
+                logger.warning(f"Error sending VC join notification in {chat_id}: {e}")
 
     async def decorators(self, client: PyTgCalls) -> None:
         @client.on_update()
