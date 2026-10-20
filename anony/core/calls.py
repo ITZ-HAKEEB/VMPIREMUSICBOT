@@ -30,6 +30,8 @@ class TgCall(PyTgCalls):
         self.played_tracks = {}
         self.autoplay_active = {}
         self.empty_prompt_msg = {}
+        self._vc_join_cooldown = {}
+        self.group_call_chats = {}
 
     async def _dl_worker(self):
         while True:
@@ -405,21 +407,31 @@ class TgCall(PyTgCalls):
             except Exception:
                 pass
 
-        # Automatically leave voice chat and clean up active call
-        await self.stop(chat_id)
+        # Disconnect assistant from voice chat automatically when playlist ends
+        client = await db.get_assistant(chat_id)
+        queue.clear(chat_id)
+        await db.remove_call(chat_id)
+        await db.set_loop(chat_id, 0)
+        self.autoplay_active.pop(chat_id, None)
+        try:
+            await client.leave_call(chat_id, close=False)
+        except Exception:
+            pass
 
         _lang = await lang.get_lang(chat_id)
         text = _lang.get(
             "autoplay_queue_empty",
             (
-                "<blockquote><b>𝖰ᴜᴇᴜᴇ Ɛɴᴅᴇᴅ</b>\n"
-                "ᴀʟʟ sᴏɴɢs ʜᴀᴠᴇ ғɪɴɪsʜᴇᴅ ᴘʟᴀʏɪɴɢ. ᴀssɪsᴛᴀɴᴛ ʜᴀs ʟᴇғᴛ ᴛʜᴇ ᴠᴏɪᴄᴇ ᴄʜᴀᴛ.</blockquote>"
+                "<blockquote><b>𝖭ᴏ 𝖬ᴏʀᴇ 𝖲ᴏɴɢs ɪɴ ᴛʜᴇ 𝖰ᴜᴇᴜᴇ\n"
+                "ᴛʜᴇ ᴘʟᴀʏʟɪsᴛ ʜᴀs ᴇɴᴅᴇᴅ — ʜɪᴛ ᴀᴜᴛᴏᴘʟᴀʏ ᴛᴏ ᴋᴇᴇᴘ ᴛʜᴇ ᴍᴜsɪᴄ ɢᴏɪɴɢ.</b></blockquote>"
             ),
         )
+        keyboard = buttons.autoplay_prompt_markup(chat_id)
         try:
             sent = await app.send_message(
                 chat_id=chat_id,
                 text=text,
+                reply_markup=keyboard,
             )
             self.empty_prompt_msg[chat_id] = sent.id
         except Exception as e:
@@ -530,6 +542,41 @@ class TgCall(PyTgCalls):
         pings = [client.ping for client in self.clients]
         return round(sum(pings) / len(pings), 3) if pings else 0.0
 
+    async def notify_vc_join(self, chat_id: int, user_id: int) -> None:
+        try:
+            if not await db.is_vc_notify(chat_id):
+                return
+
+            ub_ids = [u.me.id for u in userbot.clients if getattr(u, "me", None)]
+            bot_id = getattr(app.me, "id", None) if getattr(app, "me", None) else None
+            if user_id in ub_ids or user_id == bot_id or user_id <= 0:
+                return
+
+            import time
+            now = time.time()
+            if chat_id not in self._vc_join_cooldown:
+                self._vc_join_cooldown[chat_id] = {}
+
+            if now - self._vc_join_cooldown[chat_id].get(user_id, 0) < 15:
+                return
+            self._vc_join_cooldown[chat_id][user_id] = now
+
+            user = None
+            try:
+                user = await app.get_users(user_id)
+            except Exception:
+                pass
+
+            if user:
+                user_name = user.first_name or "User"
+                mention = f"<a href='tg://user?id={user.id}'>{user_name}</a>"
+            else:
+                mention = f"<a href='tg://user?id={user_id}'>User</a>"
+
+            text = f"<blockquote><b>👤 {mention} has joined the voice chat.</b></blockquote>"
+            await app.send_message(chat_id=chat_id, text=text, disable_web_page_preview=True)
+        except Exception as e:
+            logger.warning(f"Error sending VC join notification in {chat_id}: {e}")
 
     async def decorators(self, client: PyTgCalls) -> None:
         @client.on_update()
@@ -544,7 +591,11 @@ class TgCall(PyTgCalls):
                     types.ChatUpdate.Status.CLOSED_VOICE_CHAT,
                 ]:
                     await self.stop(update.chat_id)
-
+            elif isinstance(update, types.UpdatedGroupCallParticipant):
+                if update.action == types.GroupCallParticipant.Action.JOINED:
+                    user_id = getattr(update.participant, "user_id", None)
+                    if user_id:
+                        asyncio.create_task(self.notify_vc_join(update.chat_id, user_id))
 
     async def boot(self) -> None:
         PyTgCallsSession.notice_displayed = True
@@ -553,6 +604,44 @@ class TgCall(PyTgCalls):
             await client.start()
             self.clients.append(client)
             await self.decorators(client)
+
+            @ub.on_raw_update()
+            async def raw_vc_handler(c, update, users, chats):
+                from pyrogram.raw.types import (
+                    UpdateGroupCall,
+                    UpdateGroupCallParticipants,
+                    PeerChannel,
+                    PeerChat,
+                    PeerUser,
+                )
+                try:
+                    if isinstance(update, UpdateGroupCall):
+                        cid = None
+                        if isinstance(update.peer, PeerChannel):
+                            cid = int(f"-100{update.peer.channel_id}")
+                        elif isinstance(update.peer, PeerChat):
+                            cid = int(f"-{update.peer.chat_id}")
+                        if cid and hasattr(update, "call") and hasattr(update.call, "id"):
+                            self.group_call_chats[update.call.id] = cid
+
+                    elif isinstance(update, UpdateGroupCallParticipants):
+                        call_id = getattr(update.call, "id", None)
+                        chat_id = self.group_call_chats.get(call_id)
+                        if not chat_id:
+                            return
+                        for p in getattr(update, "participants", []):
+                            if getattr(p, "just_joined", False) or (
+                                not getattr(p, "left", False)
+                                and getattr(p, "active_date", 0) > 0
+                            ):
+                                uid = None
+                                if isinstance(getattr(p, "peer", None), PeerUser):
+                                    uid = p.peer.user_id
+                                if uid:
+                                    asyncio.create_task(self.notify_vc_join(chat_id, uid))
+                except Exception:
+                    pass
+
         for _ in range(2):
             self._dl_tasks.append(asyncio.create_task(self._dl_worker()))
         logger.info("PyTgCalls client(s) started.")

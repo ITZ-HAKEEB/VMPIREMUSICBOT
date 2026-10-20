@@ -459,3 +459,22 @@ class Inline:
                 ],
             ]
         )
+
+    def vc_notify_markup(self, chat_id: int, status: bool) -> types.InlineKeyboardMarkup:
+        toggle_text = "Disable" if status else "Enable"
+        toggle_action = "disable" if status else "enable"
+        return self.ikm(
+            [
+                [
+                    self.ikb(
+                        text=toggle_text,
+                        callback_data=f"vcnotify_toggle {chat_id} {toggle_action}",
+                    ),
+                    self.ikb(
+                        text="Close",
+                        callback_data="close",
+                    ),
+                ]
+            ]
+        )
+

@@ -157,5 +157,11 @@
     "help_5": "Play",
     "help_6": "Queue",
     "help_7": "Stats",
-    "help_8": "Sudoers"
+    "help_8": "Sudoers",
+    "vc_notify_on": "<blockquote><b>✅ 𝖵𝖢 𝖩ᴏɪɴ 𝖭ᴏᴛɪғɪᴄᴀᴛɪᴏɴs ᴇɴᴀʙʟᴇᴅ ғᴏʀ ᴛʜɪs ᴄʜᴀᴛ.</b></blockquote>",
+    "vc_notify_off": "<blockquote><b>❌ 𝖵𝖢 𝖩ᴏɪɴ 𝖭ᴏᴛɪғɪᴄᴀᴛɪᴏɴs ᴅɪsᴀʙʟᴇᴅ ғᴏʀ ᴛʜɪs ᴄʜᴀᴛ.</b></blockquote>",
+    "vc_notify_status": "<blockquote><b>𝖵𝖢 𝖩ᴏɪɴ 𝖭ᴏᴛɪғɪᴄᴀᴛɪᴏɴs :</b> <code>{}</code></blockquote>",
+    "vc_notify_enabled": "Enabled",
+    "vc_notify_disabled": "Disabled"
 }
+

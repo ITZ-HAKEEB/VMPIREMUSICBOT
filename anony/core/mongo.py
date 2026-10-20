@@ -122,6 +122,29 @@ class MongoDB:
             upsert=True,
         )
 
+    async def is_vc_notify(self, chat_id: int) -> bool:
+        if not hasattr(self, "vc_notify"):
+            self.vc_notify = {}
+            self.vc_notifydb = self.db.vc_notify
+        if chat_id not in self.vc_notify:
+            doc = await self.vc_notifydb.find_one({"_id": chat_id})
+            if doc is not None:
+                self.vc_notify[chat_id] = doc.get("status", True)
+            else:
+                self.vc_notify[chat_id] = True
+        return self.vc_notify[chat_id]
+
+    async def set_vc_notify(self, chat_id: int, status: bool) -> None:
+        if not hasattr(self, "vc_notify"):
+            self.vc_notify = {}
+            self.vc_notifydb = self.db.vc_notify
+        self.vc_notify[chat_id] = status
+        await self.vc_notifydb.update_one(
+            {"_id": chat_id},
+            {"$set": {"status": status}},
+            upsert=True,
+        )
+
     # AUTH METHODS
     async def _get_auth(self, chat_id: int) -> set[int]:
         if chat_id not in self.auth:
