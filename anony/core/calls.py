@@ -573,7 +573,26 @@ class TgCall(PyTgCalls):
             else:
                 mention = f"<a href='tg://user?id={user_id}'>User</a>"
 
-            text = f"<blockquote><b>👤 {mention} has joined the voice chat.</b></blockquote>"
+            # Check Auth status (admin or bot authorized user)
+            is_auth = False
+            try:
+                if user_id in app.sudoers or await db.is_auth(chat_id, user_id):
+                    is_auth = True
+                else:
+                    admins = await db.get_admins(chat_id)
+                    if user_id in admins:
+                        is_auth = True
+            except Exception:
+                pass
+
+            auth_str = "True" if is_auth else "False"
+
+            text = (
+                f"<blockquote><b>#JoinedVc\n"
+                f"ⓘ 𝖴sᴇʀ - {mention}\n"
+                f"ⓘ 𝖴sᴇʀɪᴅ - <code>{user_id}</code>\n"
+                f"ⓘ 𝖠ᴜᴛʜ - <code>{auth_str}</code></b></blockquote>"
+            )
             sent_msg = await app.send_message(chat_id=chat_id, text=text, disable_web_page_preview=True)
             if sent_msg:
                 async def _auto_del_vc_msg(msg: types.Message):
