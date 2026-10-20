@@ -34,10 +34,10 @@ async def _ping(_, m: types.Message):
     cpu = round(psutil.cpu_percent(interval=0), 1)
     disk = round(psutil.disk_usage("/").percent, 1)
 
-    ping_img = (
+    ping_img = config.PING_IMG or (
         "assets/ping.png"
         if os.path.exists("assets/ping.png")
-        else ("assets/ping.jpg" if os.path.exists("assets/ping.jpg") else config.PING_IMG)
+        else ("assets/ping.jpg" if os.path.exists("assets/ping.jpg") else "https://files.catbox.moe/xmcz1p.jpg")
     )
 
     caption = (

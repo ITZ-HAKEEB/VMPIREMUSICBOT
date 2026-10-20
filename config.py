@@ -54,9 +54,7 @@ class Config:
         )
         self.PING_IMG = getenv(
             "PING_IMG",
-            "assets/ping.png"
-            if os.path.exists("assets/ping.png")
-            else "https://i.ibb.co/rKJLsqNm/Chat-GPT-Image-Oct-2-2026-at-09-48-29-AM.png",
+            "https://files.catbox.moe/xmcz1p.jpg",
         )
         self.START_IMG = getenv(
             "START_IMG",
