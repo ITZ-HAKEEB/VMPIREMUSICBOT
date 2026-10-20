@@ -485,19 +485,25 @@ class YouTube:
         primary_url = getattr(config, "YT_API_URL", None)
         primary_key = getattr(config, "YT_API_KEY", None)
 
-        if not video and primary_url and primary_key:
-            res = await self._live_download_api(video_id, primary_url, primary_key)
-            if res and Path(res).exists() and Path(res).stat().st_size > 1024:
-                self._persist_song(res, video_id, title, duration, video)
-                return res
+        if primary_url and primary_key:
+            if "arcmusic" in primary_url.lower():
+                res = await self._download_from_arc_api(video_id, primary_url, primary_key, is_video=video)
+                if res and Path(res).exists() and Path(res).stat().st_size > 1024:
+                    self._persist_song(res, video_id, title, duration, video)
+                    return res
+            elif not video:
+                res = await self._live_download_api(video_id, primary_url, primary_key)
+                if res and Path(res).exists() and Path(res).stat().st_size > 1024:
+                    self._persist_song(res, video_id, title, duration, video)
+                    return res
 
-            # =====================================================================
-            # PROCESS 3: New song -> Download complete by Dedicated API (after live fail)
-            # =====================================================================
-            res = await self._complete_download_api(video_id, primary_url, primary_key)
-            if res and Path(res).exists() and Path(res).stat().st_size > 1024:
-                self._persist_song(res, video_id, title, duration, video)
-                return res
+                # =====================================================================
+                # PROCESS 3: New song -> Download complete by Dedicated API (after live fail)
+                # =====================================================================
+                res = await self._complete_download_api(video_id, primary_url, primary_key)
+                if res and Path(res).exists() and Path(res).stat().st_size > 1024:
+                    self._persist_song(res, video_id, title, duration, video)
+                    return res
 
         # =========================================================================
         # PROCESS 4: Failover API Pool & Local yt-dlp Extractor
@@ -536,8 +542,103 @@ class YouTube:
             except Exception:
                 pass
 
+    async def _download_from_arc_api(self, video_id: str, base_url: str, api_key: str, is_video: bool = False) -> str | None:
+        """Download song or video using ArcMusic API v2."""
+        base_url = base_url.rstrip("/")
+        ext = "mp4" if is_video else "mp3"
+        out_file = f"downloads/{video_id}.{ext}"
+        query_url = f"{base_url}/youtube/v2/download?query={video_id}&isVideo={'true' if is_video else 'false'}&api_key={api_key}"
+        try:
+            timeout = aiohttp.ClientTimeout(total=25)
+            async with aiohttp.ClientSession() as session:
+                async with session.get(query_url, timeout=timeout) as resp:
+                    if resp.status != 200:
+                        return None
+                    data = await resp.json()
+
+                if not data or data.get("status") != "success":
+                    return None
+
+                result = data.get("result") or {}
+                cdn = result.get("cdn") or result.get("url")
+                job_id = data.get("job_id")
+
+                # If job was queued, poll jobStatus
+                if not cdn and job_id:
+                    for _ in range(6):
+                        await asyncio.sleep(2)
+                        job_url = f"{base_url}/youtube/jobStatus?job_id={job_id}"
+                        try:
+                            async with session.get(job_url, timeout=aiohttp.ClientTimeout(total=10)) as j_resp:
+                                if j_resp.status == 200:
+                                    j_data = await j_resp.json()
+                                    if j_data.get("status") == "success":
+                                        j_res = j_data.get("result") or {}
+                                        cdn = j_res.get("cdn") or j_res.get("url")
+                                        if cdn:
+                                            break
+                                    elif j_data.get("status") == "failed":
+                                        break
+                        except Exception:
+                            pass
+
+                if not cdn:
+                    return None
+
+                Path("downloads").mkdir(parents=True, exist_ok=True)
+
+                # 1. If CDN is a Telegram channel message link (e.g., https://t.me/ArcAPI_1/34841)
+                if "t.me/" in cdn:
+                    from anony import app, userbot
+                    parts = cdn.rstrip("/").split("/")
+                    channel = parts[-2]
+                    msg_id = int(parts[-1])
+
+                    # Try via bot (app)
+                    try:
+                        msg = await app.get_messages(channel, msg_id)
+                        if msg and (msg.audio or msg.document or msg.video):
+                            path = await app.download_media(msg, file_name=out_file)
+                            if path and Path(path).exists() and Path(path).stat().st_size > 1024:
+                                logger.info(f"[ARCMUSIC TG HIT] Restored {video_id} via Bot from {cdn}")
+                                return path
+                    except Exception as e:
+                        logger.debug(f"ArcMusic bot download error: {e}")
+
+                    # Try via assistant userbot if app fails
+                    if userbot and getattr(userbot, "clients", None):
+                        try:
+                            ub = userbot.clients[0]
+                            msg = await ub.get_messages(channel, msg_id)
+                            if msg and (msg.audio or msg.document or msg.video):
+                                path = await ub.download_media(msg, file_name=out_file)
+                                if path and Path(path).exists() and Path(path).stat().st_size > 1024:
+                                    logger.info(f"[ARCMUSIC TG HIT] Restored {video_id} via Assistant from {cdn}")
+                                    return path
+                        except Exception as e:
+                            logger.debug(f"ArcMusic userbot download error: {e}")
+
+                # 2. If CDN is a direct HTTP/HTTPS link
+                elif cdn.startswith("http"):
+                    dl_timeout = aiohttp.ClientTimeout(connect=10, sock_read=60, total=300)
+                    async with session.get(cdn, headers={"User-Agent": "Mozilla/5.0"}, timeout=dl_timeout) as dl_resp:
+                        if dl_resp.status in (200, 206):
+                            tmp_out = f"{out_file}.tmp"
+                            with open(tmp_out, "wb") as f:
+                                async for chunk in dl_resp.content.iter_chunked(256 * 1024):
+                                    f.write(chunk)
+                            if Path(tmp_out).exists() and Path(tmp_out).stat().st_size > 1024:
+                                os.replace(tmp_out, out_file)
+                                logger.info(f"[ARCMUSIC HTTP HIT] Downloaded {video_id} from {cdn}")
+                                return out_file
+        except Exception as e:
+            logger.warning(f"ArcMusic download failed for {video_id}: {e}")
+        return None
+
     async def _live_download_api(self, video_id: str, base_url: str, api_key: str) -> str | None:
         """Process 2: Live download stream from dedicated API."""
+        if "arcmusic" in base_url.lower():
+            return await self._download_from_arc_api(video_id, base_url, api_key, is_video=False)
         base_url = base_url.rstrip("/")
         out_file = f"downloads/{video_id}.mp3"
         req_url = f"{base_url}/audio?id={video_id}"
@@ -586,6 +687,8 @@ class YouTube:
 
     async def _complete_download_api(self, video_id: str, base_url: str, api_key: str) -> str | None:
         """Process 3: Complete download (100% cached audio file) from dedicated API."""
+        if "arcmusic" in base_url.lower():
+            return await self._download_from_arc_api(video_id, base_url, api_key, is_video=False)
         base_url = base_url.rstrip("/")
         out_file = f"downloads/{video_id}.mp3"
         complete_url = f"{base_url}/download/complete?id={video_id}"
@@ -615,6 +718,7 @@ class YouTube:
         from anony import config
         primary_url = (getattr(config, "YT_API_URL", None) or "").rstrip("/")
         api_pool = [
+            {"name": "ArcMusic", "url": "https://api.arcmusic.fun", "key": "ARC5c354b8ef8b2b1ef5d9e8b"},
             {"name": "Noah", "url": "https://noah-api-v3-12d3419875af.herokuapp.com", "key": "Noah-LrTinhpR67h7C_HoCGykI9wHARDRJPJVz3TwBSq6wd4"},
             {"name": "Titanic", "url": "https://titanic-api-v3-01462a8481af.herokuapp.com", "key": "titanic_lhQkzaBhIQTwpquq_XBIfBI52wtN49fhdTOBBBkfLNo"},
             {"name": "Panda", "url": "https://panda-api-v3-6e9434966ef9.herokuapp.com", "key": "panda_qpyudLY8bF8rFt69yK-fbLU5wQSO1nHK9H4GixjYNTY"},
@@ -626,6 +730,11 @@ class YouTube:
         for item in api_pool:
             c_url = item["url"].rstrip("/")
             if c_url == primary_url:
+                continue
+            if "arcmusic" in c_url.lower():
+                res = await self._download_from_arc_api(video_id, c_url, item["key"])
+                if res:
+                    return res
                 continue
             # Try complete download first on backup
             res = await self._complete_download_api(video_id, c_url, item["key"])
