@@ -8,14 +8,92 @@ import asyncio
 
 from pyrogram import enums, errors, filters, types
 
-from anony import anon, app, config, db, lang, queue, tasks, userbot, yt
+from anony import anon, app, config, db, lang, logger, queue, tasks, userbot, yt
 from anony.helpers import buttons
 
 
+def format_duration(seconds: int) -> str:
+    if not seconds:
+        return "0s"
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+    parts = []
+    if hours > 0:
+        parts.append(f"{hours}m" if minutes == 0 else f"{hours}h {minutes}m")
+    elif minutes > 0:
+        parts.append(f"{minutes}m")
+    if secs > 0 or not parts:
+        parts.append(f"{secs}s")
+    return " ".join(parts)
+
+
 @app.on_message(filters.video_chat_started, group=19)
+async def _vc_started(_, m: types.Message):
+    try:
+        if m.from_user:
+            user_name = m.from_user.first_name or "User"
+            started_by = f"<a href='tg://user?id={m.from_user.id}'>{user_name}</a>"
+            id_val = m.from_user.id
+        elif m.sender_chat:
+            started_by = m.sender_chat.title or "Chat"
+            id_val = m.sender_chat.id
+        else:
+            started_by = m.chat.title or "Chat"
+            id_val = m.chat.id
+
+        text = (
+            f"<blockquote><b>ᴠɪᴅᴇᴏ ᴄʜᴀᴛ sᴛᴀʀᴛᴇᴅ\n"
+            f"──────────\n"
+            f"sᴛᴀʀᴛᴇᴅ ʙʏ: {started_by}\n"
+            f"ɪᴅ: <code>{id_val}</code>\n"
+            f"──────────</b></blockquote>"
+        )
+
+        if m.chat.username:
+            vc_url = f"https://t.me/{m.chat.username}?videochat"
+        else:
+            c_id = str(m.chat.id).replace("-100", "").replace("-", "")
+            vc_url = f"https://t.me/c/{c_id}?videochat"
+
+        markup = types.InlineKeyboardMarkup(
+            [[types.InlineKeyboardButton(text="💫 JOIN VC", url=vc_url)]]
+        )
+
+        await m.reply_text(text, reply_markup=markup, disable_web_page_preview=True)
+    except Exception as e:
+        logger.warning(f"Error handling video_chat_started in {m.chat.id}: {e}")
+
+
 @app.on_message(filters.video_chat_ended, group=20)
-async def _watcher_vc(_, m: types.Message):
+async def _vc_ended(_, m: types.Message):
     await anon.stop(m.chat.id)
+    try:
+        if m.from_user:
+            user_name = m.from_user.first_name or "User"
+            ended_by = f"<a href='tg://user?id={m.from_user.id}'>{user_name}</a>"
+            id_val = m.from_user.id
+        elif m.sender_chat:
+            ended_by = m.sender_chat.title or "Chat"
+            id_val = m.sender_chat.id
+        else:
+            ended_by = m.chat.title or "Chat"
+            id_val = m.chat.id
+
+        duration_sec = getattr(m.video_chat_ended, "duration", 0)
+        duration_str = format_duration(duration_sec)
+
+        text = (
+            f"<blockquote><b>ᴠɪᴅᴇᴏ ᴄʜᴀᴛ ᴇɴᴅᴇᴅ\n"
+            f"──────────\n"
+            f"ᴇɴᴅᴇᴅ ʙʏ: {ended_by}\n"
+            f"ɪᴅ: <code>{id_val}</code>\n"
+            f"ᴅᴜʀᴀᴛɪᴏɴ: {duration_str}\n"
+            f"──────────</b></blockquote>"
+        )
+        await m.reply_text(text, disable_web_page_preview=True)
+    except Exception as e:
+        logger.warning(f"Error handling video_chat_ended in {m.chat.id}: {e}")
 
 
 async def auto_leave():

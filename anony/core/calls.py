@@ -9,9 +9,11 @@ from pathlib import Path
 from ntgcalls import (ConnectionNotFound, TelegramServerError,
                       RTMPStreamingUnsupported, ConnectionError,
                       TransportParseException)
+from pyrogram.enums import ChatMemberStatus
 from pyrogram.errors import (ChatSendMediaForbidden, ChatSendPhotosForbidden,
                              MessageIdInvalid)
-from pyrogram.types import InputMediaPhoto, Message
+from pyrogram.types import (InlineKeyboardButton, InlineKeyboardMarkup,
+                            InputMediaPhoto, Message)
 from pytgcalls import PyTgCalls, exceptions, types
 from pytgcalls.pytgcalls_session import PyTgCallsSession
 
@@ -573,27 +575,56 @@ class TgCall(PyTgCalls):
             else:
                 mention = f"<a href='tg://user?id={user_id}'>User</a>"
 
-            # Check Auth status (admin or bot authorized user)
-            is_auth = False
+            # Check AUTH role (Owner / Admin / Member)
+            role = "Member"
             try:
-                if user_id in app.sudoers or await db.is_auth(chat_id, user_id):
-                    is_auth = True
+                if user_id in app.sudoers:
+                    role = "Owner"
                 else:
+                    member = await app.get_chat_member(chat_id, user_id)
+                    if member.status == ChatMemberStatus.OWNER:
+                        role = "Owner"
+                    elif member.status == ChatMemberStatus.ADMINISTRATOR:
+                        role = "Admin"
+                    elif await db.is_auth(chat_id, user_id):
+                        role = "Admin"
+            except Exception:
+                try:
                     admins = await db.get_admins(chat_id)
                     if user_id in admins:
-                        is_auth = True
-            except Exception:
-                pass
-
-            auth_str = "True" if is_auth else "False"
+                        role = "Admin"
+                except Exception:
+                    pass
 
             text = (
                 f"<blockquote><b>#JoinedVc\n"
-                f"ⓘ 𝖴sᴇʀ - {mention}\n"
-                f"ⓘ 𝖴sᴇʀɪᴅ - <code>{user_id}</code>\n"
-                f"ⓘ 𝖠ᴜᴛʜ - <code>{auth_str}</code></b></blockquote>"
+                f"ⓘ User - {mention}\n"
+                f"ⓘ UserID - <code>{user_id}</code>\n"
+                f"ⓘ AUTH - {role}</b></blockquote>"
             )
-            sent_msg = await app.send_message(chat_id=chat_id, text=text, disable_web_page_preview=True)
+
+            chat = None
+            try:
+                chat = await app.get_chat(chat_id)
+            except Exception:
+                pass
+
+            if chat and getattr(chat, "username", None):
+                vc_url = f"https://t.me/{chat.username}?videochat"
+            else:
+                c_id = str(chat_id).replace("-100", "").replace("-", "")
+                vc_url = f"https://t.me/c/{c_id}?videochat"
+
+            markup = InlineKeyboardMarkup(
+                [[InlineKeyboardButton(text="💫 JOIN VC", url=vc_url)]]
+            )
+
+            sent_msg = await app.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=markup,
+                disable_web_page_preview=True,
+            )
             if sent_msg:
                 async def _auto_del_vc_msg(msg):
                     await asyncio.sleep(5)
