@@ -38,6 +38,29 @@ async def start(_, message: types.Message):
     if len(message.command) > 1 and message.command[1] == "help":
         return await _help(_, message)
 
+    try:
+        import random
+        emojis = ["⚡", "🔥", "✨", "❤️", "🎉", "🕊️"]
+        await message.react(random.choice(emojis))
+    except Exception:
+        pass
+
+    anim_frames = [
+        "<blockquote><b>⟡ Sᴛᴀʀᴛɪɴɢ Nɪᴛʏᴀ Mᴜsɪᴄ...</b></blockquote>",
+        "<blockquote><b>⟡ Lᴏᴀᴅɪɴɢ Cᴏʀᴇ Mᴏᴅᴜʟᴇs... ⚙️</b></blockquote>",
+        "<blockquote><b>⟡ Cᴏɴɴᴇᴄᴛɪɴɢ Sᴇʀᴠᴇʀs... ⚡</b></blockquote>",
+        "<blockquote><b>⟡ Iɴɪᴛɪᴀʟɪᴢᴀᴛɪᴏɴ Cᴏᴍᴘʟᴇᴛᴇ! ✨</b></blockquote>",
+    ]
+    anim_msg = None
+    try:
+        anim_msg = await message.reply_text(anim_frames[0], quote=True)
+        for frame in anim_frames[1:]:
+            await asyncio.sleep(0.35)
+            await anim_msg.edit_text(frame)
+        await asyncio.sleep(0.3)
+    except Exception:
+        pass
+
     private = message.chat.type == enums.ChatType.PRIVATE
     bot_mention = app.mention
 
@@ -89,6 +112,11 @@ async def start(_, message: types.Message):
         has_spoiler=True,
         quote=not private,
     )
+    if anim_msg:
+        try:
+            await anim_msg.delete()
+        except Exception:
+            pass
 
     if private:
         if await db.is_user(message.from_user.id):
