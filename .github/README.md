@@ -1,7 +1,7 @@
 # VAMPIRE-MUSIC
 
 ## 🚀 Deploy on Heroku 
-[![Deploy](https://www.herokucdn.com/deploy/button.svg)](https://dashboard.heroku.com/new?template=https://github.com/VBIT-BOT-ADDA/Kashvimusic)
+[![Deploy](https://www.herokucdn.com/deploy/button.svg)](https://dashboard.heroku.com/new?template=https://github.com/ITZ-HAKEEB/VMPIREMUSICBOT)
 
 <h1 align="center">─「 ǫᴜɪᴄᴋ sᴇᴛᴜᴘ 」─</h1>
 
@@ -24,7 +24,7 @@
    ```
  5. **📥 ᴄʟᴏɴᴇ ᴛʜᴇ ʀᴇᴘᴏsɪᴛᴏʀʏ**
    ```bash
-   git clone https://github.com/VBIT-BOT-ADDA/Kashvimusic && cd Kashvimusic
+   git clone https://github.com/ITZ-HAKEEB/VMPIREMUSICBOT && cd VMPIREMUSICBOT
    ```
  6. **📂 ɪɴsᴛᴀʟʟ ʀᴇǫᴜɪʀᴇᴍᴇɴᴛs**
    ```bash
