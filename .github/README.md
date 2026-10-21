@@ -14,35 +14,35 @@
    ```bash
    sudo apt-get install python3-pip ffmpeg -y
    ```
- 4. **📌 sᴇᴛᴛɪɴɢ ᴜᴘ ᴘɪᴘ**
+ 3. **📌 sᴇᴛᴛɪɴɢ ᴜᴘ ᴘɪᴘ**
    ```bash
    sudo pip3 install -U pip
    ```
- 5. **⚡ ɪɴsᴛᴀʟʟɪɴɢ ɴᴏᴅᴇ**
+ 4. **⚡ ɪɴsᴛᴀʟʟɪɴɢ ɴᴏᴅᴇ**
    ```bash
    curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.38.0/install.sh | bash && source ~/.bashrc && nvm install v18
    ```
- 6. **📥 ᴄʟᴏɴᴇ ᴛʜᴇ ʀᴇᴘᴏsɪᴛᴏʀʏ**
+ 5. **📥 ᴄʟᴏɴᴇ ᴛʜᴇ ʀᴇᴘᴏsɪᴛᴏʀʏ**
    ```bash
    git clone https://github.com/VBIT-BOT-ADDA/Kashvimusic && cd Kashvimusic
    ```
- 7. **📂 ɪɴsᴛᴀʟʟ ʀᴇǫᴜɪʀᴇᴍᴇɴᴛs**
+ 6. **📂 ɪɴsᴛᴀʟʟ ʀᴇǫᴜɪʀᴇᴍᴇɴᴛs**
    ```bash
    pip3 install -U -r requirements.txt
    ```
- 8. **📝 ᴄʀᴇᴀᴛᴇ .env ᴡɪᴛʜ sᴀᴍᴘʟᴇ.env**
+ 7. **📝 ᴄʀᴇᴀᴛᴇ .env ᴡɪᴛʜ sᴀᴍᴘʟᴇ.env**
    ```bash
    cp sample.env .env
    ```
    - Edit .env with your vars
- 9. **✏️ ᴇᴅɪᴛɪɴɢ ᴠᴀʀs**
+ 8. **✏️ ᴇᴅɪᴛɪɴɢ ᴠᴀʀs**
    ```bash
    vi .env
    ```
    - Edit .env with your values.
    - Press `I` button on keyboard to start editing.
    - Press `Ctrl + C`  once you are done with editing vars and type `:wq` to save .env or `:qa` to exit editing.
-10. **🔗 ɪɴsᴛᴀʟʟɪɴɢ ᴛᴍᴜx**
+9. **🔗 ɪɴsᴛᴀʟʟɪɴɢ ᴛᴍᴜx**
     ```bash
     sudo apt install tmux -y && tmux
     ```
