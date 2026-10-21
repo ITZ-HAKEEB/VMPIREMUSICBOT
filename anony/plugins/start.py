@@ -46,7 +46,7 @@ async def start(_, message: types.Message):
         pass
 
     anim_frames = [
-        "<blockquote><b>emoji id=6276023005684441910>🌸</emoji></b></blockquote>",
+        "<blockquote><b><emoji id=6276023005684441910>🌸</emoji></b></blockquote>",
     ]
     anim_msg = None
     try:
