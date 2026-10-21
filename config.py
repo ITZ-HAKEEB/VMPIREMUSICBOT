@@ -58,7 +58,7 @@ class Config:
         )
         self.START_IMG = getenv(
             "START_IMG",
-            "https://i.ibb.co/b5sr0CLv/Chat-GPT-Image-Oct-2-2026-at-09-36-30-AM.png",
+            "https://files.catbox.moe/y3d6qf.jpg",
         )
 
     def check(self):
