@@ -145,6 +145,11 @@ class TgCall(PyTgCalls):
             await client.leave_call(chat_id, close=False)
         except Exception:
             pass
+        try:
+            if hasattr(client, "_app") and hasattr(client._app, "leave_group_call"):
+                await client._app.leave_group_call(chat_id)
+        except Exception:
+            pass
 
 
     async def play_media(
@@ -420,6 +425,11 @@ class TgCall(PyTgCalls):
             await client.leave_call(chat_id, close=False)
         except Exception:
             pass
+        try:
+            if hasattr(client, "_app") and hasattr(client._app, "leave_group_call"):
+                await client._app.leave_group_call(chat_id)
+        except Exception:
+            pass
 
         _lang = await lang.get_lang(chat_id)
         text = _lang.get(
@@ -639,6 +649,54 @@ class TgCall(PyTgCalls):
             if "CHANNEL_INVALID" not in err_str and "CHAT_WRITE_FORBIDDEN" not in err_str:
                 logger.warning(f"Error sending VC join notification in {chat_id}: {e}")
 
+    async def check_empty_vc(self, chat_id: int) -> None:
+        """Check if all real listeners have left the voice chat and auto-leave."""
+        try:
+            await asyncio.sleep(5)
+            if chat_id not in db.active_calls:
+                return
+            client = await db.get_assistant(chat_id)
+            participants = await client.get_participants(chat_id)
+            assistant_ids = {c.id for c in userbot.clients if getattr(c, "id", None)}
+            if getattr(app, "id", None):
+                assistant_ids.add(app.id)
+
+            listeners = [
+                p.user_id for p in (participants or [])
+                if getattr(p, "user_id", None) and p.user_id not in assistant_ids
+            ]
+
+            if not listeners:
+                await asyncio.sleep(10)
+                if chat_id not in db.active_calls:
+                    return
+                participants = await client.get_participants(chat_id)
+                listeners = [
+                    p.user_id for p in (participants or [])
+                    if getattr(p, "user_id", None) and p.user_id not in assistant_ids
+                ]
+                if not listeners and chat_id in db.active_calls:
+                    _lang = await lang.get_lang(chat_id)
+                    media = queue.get_current(chat_id)
+                    if media and getattr(media, "message_id", None):
+                        try:
+                            await app.edit_message_reply_markup(
+                                chat_id=chat_id,
+                                message_id=media.message_id,
+                                reply_markup=buttons.controls(
+                                    chat_id=chat_id, status=_lang["stopped"], remove=True
+                                ),
+                            )
+                        except Exception:
+                            pass
+                    await self.stop(chat_id)
+                    try:
+                        await app.send_message(chat_id, _lang["auto_left"])
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
     async def decorators(self, client: PyTgCalls) -> None:
         @client.on_update()
         async def update_handler(_, update: types.Update) -> None:
@@ -657,6 +715,11 @@ class TgCall(PyTgCalls):
                     user_id = getattr(update.participant, "user_id", None)
                     if user_id:
                         asyncio.create_task(self.notify_vc_join(update.chat_id, user_id))
+                elif update.action in [
+                    types.GroupCallParticipant.Action.LEFT,
+                    types.GroupCallParticipant.Action.KICKED,
+                ]:
+                    asyncio.create_task(self.check_empty_vc(update.chat_id))
 
     async def boot(self) -> None:
         PyTgCallsSession.notice_displayed = True

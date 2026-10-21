@@ -182,33 +182,55 @@ async def update_timer(length=10, sleep=12):
                 pass
 
 
-async def vc_watcher(sleep=15):
+_empty_vc_count = {}
+
+
+async def vc_watcher(sleep=10):
+    """
+    Watches voice chats and automatically leaves if no real listeners remain.
+    """
     while True:
         await asyncio.sleep(sleep)
         for chat_id in list(db.active_calls):
             try:
                 client = await db.get_assistant(chat_id)
-                media = queue.get_current(chat_id)
-                if not media:
-                    await anon.stop(chat_id)
-                    continue
                 participants = await client.get_participants(chat_id)
-                if len(participants) < 2 and getattr(media, "time", 0) > 30:
-                    _lang = await lang.get_lang(chat_id)
-                    try:
-                        sent = await app.edit_message_reply_markup(
-                            chat_id=chat_id,
-                            message_id=media.message_id,
-                            reply_markup=buttons.controls(
-                                chat_id=chat_id, status=_lang["stopped"], remove=True
-                            ),
-                        )
+                assistant_ids = {c.id for c in userbot.clients if getattr(c, "id", None)}
+                if getattr(app, "id", None):
+                    assistant_ids.add(app.id)
+
+                listeners = [
+                    p.user_id for p in (participants or [])
+                    if getattr(p, "user_id", None) and p.user_id not in assistant_ids
+                ]
+
+                if not listeners:
+                    _empty_vc_count[chat_id] = _empty_vc_count.get(chat_id, 0) + 1
+                    # If empty for 2 consecutive checks (~15-20s), leave VC
+                    if _empty_vc_count[chat_id] >= 2:
+                        _empty_vc_count.pop(chat_id, None)
+                        _lang = await lang.get_lang(chat_id)
+                        media = queue.get_current(chat_id)
+                        if media and getattr(media, "message_id", None):
+                            try:
+                                await app.edit_message_reply_markup(
+                                    chat_id=chat_id,
+                                    message_id=media.message_id,
+                                    reply_markup=buttons.controls(
+                                        chat_id=chat_id, status=_lang["stopped"], remove=True
+                                    ),
+                                )
+                            except Exception:
+                                pass
                         await anon.stop(chat_id)
-                        await sent.reply_text(_lang["auto_left"])
-                    except Exception:
-                        await anon.stop(chat_id)
-            except Exception:
-                pass
+                        try:
+                            await app.send_message(chat_id, _lang["auto_left"])
+                        except Exception:
+                            pass
+                else:
+                    _empty_vc_count[chat_id] = 0
+            except Exception as e:
+                logger.debug(f"vc_watcher error in {chat_id}: {e}")
 
 
 if config.AUTO_END:
