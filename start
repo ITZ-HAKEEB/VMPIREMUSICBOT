@@ -1,1 +1,10 @@
-uv run python3 -m anony
+#!/bin/bash
+export PATH="$HOME/.local/bin:$HOME/.deno/bin:/usr/local/bin:$PATH"
+
+if command -v uv &>/dev/null; then
+    uv run python3 -m anony
+elif [ -d ".venv" ]; then
+    .venv/bin/python3 -m anony
+else
+    python3 -m anony
+fi

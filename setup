@@ -3,7 +3,12 @@
 set -o pipefail
 
 [ -n "$BASH_VERSION" ] || { echo "Run with bash"; exit 1; }
-command -v sudo &>/dev/null || { echo "sudo is required"; exit 1; }
+if [ "$(id -u)" -ne 0 ] && ! command -v sudo &>/dev/null; then
+    echo "sudo or root is required"
+    exit 1
+fi
+SUDO=""
+[ "$(id -u)" -ne 0 ] && SUDO="sudo"
 
 pprint() {
     local msg="$1" c="$2" r="\033[0m"
@@ -62,9 +67,7 @@ install_deno() {
             pprint "Deno path added to ~/.bashrc\n" "cyellow"
         fi
 
-        export DENO_INSTALL="$HOME/.deno"
-        export PATH="$DENO_INSTALL/bin:$PATH"
-
+        $SUDO ln -sf "$deno_path/deno" /usr/local/bin/deno 2>/dev/null || true
         pprint "Deno installation complete.\n" "cgreen"
     else
         pprint "Deno installation failed.\n" "cred"
